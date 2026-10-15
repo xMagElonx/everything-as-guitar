@@ -21,8 +21,9 @@ button { font:inherit; padding:6px 14px; border:1px solid var(--line);
 button:hover { border-color:var(--ink); }
 button.primary { background:var(--ink); color:#fff; border-color:var(--ink); }
 button.danger { color:var(--hot); border-color:var(--hot); }
+button.gest { padding:10px 18px; font-size:16px; }
 button:disabled { opacity:.4; cursor:not-allowed; }
-select, input[type=range] { font:inherit; }
+select, input[type=number] { font:inherit; }
 label.ck { display:inline-flex; align-items:center; gap:6px; margin-left:12px; }
 .warn { color:var(--hot); font-size:13px; }
 .dim { color:var(--dim); font-size:13px; }
@@ -30,12 +31,14 @@ label.ck { display:inline-flex; align-items:center; gap:6px; margin-left:12px; }
 /* 和弦垫 */
 #pads { display:flex; flex-wrap:wrap; gap:10px; }
 .pad { width:86px; padding:10px 0 8px; text-align:center; border:1px solid var(--line);
-       border-radius:10px; background:#faf8f4; cursor:pointer; user-select:none; }
+       border-radius:10px; background:#faf8f4; cursor:pointer; user-select:none;
+       touch-action:manipulation; }
 .pad:hover { border-color:var(--ink); }
 .pad:active { background:var(--ink); color:#fff; }
+.pad.sel { background:var(--ink); color:#fff; border-color:var(--ink); }
 .pad .nm { font-size:17px; font-weight:600; }
 .pad .key { font-size:11px; color:var(--dim); }
-.pad:active .key { color:#ccc; }
+.pad.sel .key, .pad:active .key { color:#ccc; }
 /* 控制行 */
 .row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:8px 0; }
 .row .lbl { color:var(--dim); font-size:13px; min-width:64px; }
@@ -45,66 +48,109 @@ input[type=range] { width:220px; }
 #log .hot { color:var(--hot); }
 details { margin-top:8px; }
 summary { cursor:pointer; color:var(--dim); font-size:13px; }
+/* 窄屏（手机 + 蓝牙 MIDI 场景） */
+@media (max-width: 640px) {
+  body { padding:12px; }
+  .panel { padding:12px; }
+  .pad { width:calc(20% - 8px); min-width:56px; }
+  input[type=range] { width:130px; }
+  button.gest { padding:12px 14px; }
+}
 </style>
 </head>
 <body>
 <h1>FM-1 演奏台</h1>
-<div class="sub">fm1-guitar · 在浏览器里像弹吉他一样弹 FM-1 —— 和弦垫、扫弦、闷音；本地试听，或把演奏发到设备（USB）</div>
+<div class="sub">fm1-guitar · 吉他技法 × 合成器：左手选和弦、右手扫弦（下扫/上扫/哑音）、按住连扫、循环节奏型 —— 扫弦引擎音色无关，选 bell 也能扫 bell</div>
 
 <div class="panel" id="voice-panel">
-  <h2>① 音色 <span class="tag">设备当前音色 = 这里选中的音色（用音色台写入）</span></h2>
+  <h2>① 音色 <span class="tag">本地选中只影响试听；设备要响同样的音色 → ④「推送到设备」</span></h2>
   <div class="row">
     <select id="voice-sel"></select>
     <button id="btn-audition">试听（单音 C3）</button>
     <button id="btn-load">载入 .syx / .bin 音色库</button>
     <input type="file" id="file-in" accept=".syx,.bin,.mid" multiple style="display:none">
   </div>
-  <div class="dim" id="voice-note">随附 32 个 CC0 音色（data/starter.js）；也可载入你自己收藏的 DX7 bank（.syx，4104 字节）。</div>
+  <div class="dim" id="voice-note">随附 32 个 CC0 音色 + 2 个原创吉他音色（data/guitar.js，实测数据见 design 字段）；也可载入你自己的 DX7 bank。</div>
 </div>
 
 <div class="panel">
-  <h2>② 和弦垫 <span class="tag">点击，或按键盘 <b>1–0</b></span></h2>
+  <h2>② 和弦垫 · 左手 <span class="tag">点垫或按 <b>1–0</b> 选中（选中不发声）；<b>按住垫 = 连续下扫</b>，松手停</span></h2>
   <div id="pads"></div>
 </div>
 
 <div class="panel">
-  <h2>③ 演奏方式</h2>
+  <h2>③ 右手手势 <span class="tag">按钮或键盘 <b>D / U / X</b>，按一次扫一次</span></h2>
   <div class="row">
-    <span class="lbl">扫弦</span>
-    <label><input type="radio" name="pattern" value="down" checked> 下扫 ▼</label>
-    <label><input type="radio" name="pattern" value="up"> 上扫 ▲</label>
-    <label><input type="radio" name="pattern" value="chuck"> 哑音扫弦 ✕</label>
+    <button id="btn-down" class="gest">▼ 下扫 <span class="dim">D</span></button>
+    <button id="btn-up" class="gest">▲ 上扫 <span class="dim">U</span></button>
+    <button id="btn-chuck" class="gest">✕ 哑音 <span class="dim">X</span></button>
     <label class="ck"><input type="checkbox" id="ck-pm"> 闷音（掌缘，事件级）</label>
   </div>
   <div class="row">
     <span class="lbl">扫弦时长</span>
     <input type="range" id="rng-spread" min="40" max="200" step="5" value="90">
     <span class="dim" id="spread-val">90 ms</span>
-    <span class="dim">（真实拨片一次下扫约 60–120ms；上扫一般更快、更轻）</span>
+    <span class="dim">（真实拨片一次下扫约 60–120ms；上扫更快更轻）</span>
+  </div>
+  <div class="row">
+    <span class="lbl">人性化</span>
+    <label class="ck" style="margin-left:0"><input type="checkbox" id="ck-hum" checked> 开（<b>H</b>）</label>
+    <span class="dim">时机 ±</span><input type="range" id="rng-humt" min="0" max="15" step="1" value="6">
+    <span class="dim" id="humt-val">6 ms</span>
+    <span class="dim">力度 ±</span><input type="range" id="rng-humv" min="0" max="30" step="1" value="10">
+    <span class="dim" id="humv-val">10 vel</span>
+    <span class="dim">（固定种子，可复现；关掉 = 完美节拍器）</span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>④ 循环 <span class="tag"><b>空格</b> 开/关；换和弦下一小节生效；BPM 用 <b>[ ]</b> 调</span></h2>
+  <div class="row">
+    <span class="lbl">节奏型</span>
+    <select id="sel-rhythm">
+      <option value="folk">民谣 down-down-up-up</option>
+      <option value="folkUp">民谣+反拍 up</option>
+      <option value="punk">朋克八分 chug</option>
+      <option value="ballad">慢歌 down…up-up</option>
+    </select>
+    <span class="lbl">BPM</span>
+    <input type="range" id="rng-bpm" min="60" max="200" step="5" value="100">
+    <span class="dim" id="bpm-val">100</span>
+    <span class="lbl">种子</span>
+    <input type="number" id="in-seed" value="1" min="1" step="1" style="width:90px">
+    <button id="btn-dice">🎲 换种子</button>
+    <button id="btn-loop" class="primary">▶ 循环 开/关</button>
   </div>
 </div>
 
 <div class="panel" id="midi-panel">
-  <h2>④ 发到设备 <span class="tag">Web MIDI · 走 USB，别走 TRS（长消息会溢出）</span></h2>
+  <h2>⑤ 发到设备 <span class="tag">Web MIDI · 走 USB；蓝牙 MIDI 见下方说明</span></h2>
   <div class="row">
     <button id="btn-connect" class="primary">连接 MIDI</button>
     <select id="port-sel" style="min-width:220px"></select>
     <label class="ck"><input type="checkbox" id="ck-send"> 把演奏发到设备</label>
   </div>
   <div class="row">
+    <button id="btn-push" class="danger" disabled>推送当前音色到设备（155 参数直改）</button>
     <button id="btn-note" disabled>发单音（真机验证用）</button>
     <button id="btn-pmmacro" class="danger" disabled>闷音宏（实时改设备音色）</button>
     <label class="ck"><input type="checkbox" id="ck-confirm"> 我知道这条路径<b>没在真机上验证过</b></label>
   </div>
-  <div class="warn">⚠ 两条路径都没在真机上验证过：① 演奏用的 MIDI Note On/Off（上游证据只覆盖 SysEx）；② 闷音宏的实时单参数消息（V15，圈内一条实测锚点）。「已发出」≠「已执行」—— 有结果请回来告诉我们。</div>
+  <div class="row">
+    <span class="lbl">MIDI 输入</span>
+    <select id="in-sel" style="min-width:220px"></select>
+    <span class="dim">低音区 C2–A2 = 选和弦（10 槽）｜C4/D4/E4 = 下扫/上扫/哑音</span>
+  </div>
+  <div class="dim">真机三步：① USB 连接，琴上 <b>EDIT → POLY</b> 确认复音、<b>关掉 ARP/SEQ</b>、GLO 查通道 → ② 选音色，点「推送当前音色到设备」（<b>不 SAVE 断电即失</b>，要留就在琴上按住 SAVE）→ ③ 在本页按手势/循环，或用 MIDI 键盘（低音区选和弦、高音区扫弦）。蓝牙：Android Chrome 支持 BLE MIDI；iOS Safari 不支持 Web MIDI，只能本地试听。</div>
+  <div class="warn">⚠ 两条路径都没在真机上验证过：① 演奏用的 MIDI Note On/Off（上游证据只覆盖 SysEx）；② 实时单参数推送/闷音宏（V15，圈内一条实测锚点）。「已发出」≠「已执行」—— 有结果请回来告诉我们。</div>
 </div>
 
 <div class="panel">
-  <h2>⑤ 日志</h2>
+  <h2>⑥ 日志</h2>
   <div id="log">就绪。</div>
   <details>
     <summary>这一页在做什么（一段话）</summary>
-    <div class="dim" style="margin-top:6px">点一个和弦垫，引擎把它拆成「每根弦一个音符」的事件序列：起音按拨弦次序错开（扫弦时长由滑杆控制）、力度沿拨弦序递减、哑音扫弦和闷音把音符时值掐短。本地试听用自带 FM 引擎渲染这些音符；发到设备则变成标准 MIDI Note On/Off（时间戳调度）。闷音宏是另一层：不刷固件、用 V15 的实时单参数消息改「正在响的音色」的包络与反馈。引擎与音色字节格式来自姊妹项目 fm1-tone-engine（ENGINE-FORK.md 有出处）。</div>
+    <div class="dim" style="margin-top:6px">左手：和弦垫选中一个和弦（不发声）。右手：手势键把「扫一下」拆成每根弦一个音符的事件序列 —— 起音按拨弦次序错开、力度沿拨弦序递减、人性化给每根弦加固定种子的微小随机。空格开循环后调度器按 BPM 反复排小节，换和弦下一小节生效。本地试听用自带 FM 引擎渲染；发到设备则变成标准 MIDI Note On/Off。「推送当前音色」用 V15 的 155 条实时单参数消息把设备编辑缓冲直接变成所选音色。琴上按键做不到扫弦（ARP 是单音琶音、SEQ 是 16 步录音）—— 扫弦引擎必须住在外部，琴是嗓音。引擎与字节格式来自姊妹项目 fm1-tone-engine（ENGINE-FORK.md 有出处）。</div>
   </details>
 </div>
 
@@ -113,12 +159,16 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
 <script src="engine/midi.js"></script>
 <script src="engine/params.js"></script>
 <script src="engine/strum.js"></script>
+<script src="engine/seq.js"></script>
 <script src="data/starter.js"></script>
+<script src="data/guitar.js"></script>
 <script>
 /* ============================================================================
    FM-1 演奏台 · 页面层
-   引擎（UMD 全局）：DX7 / FM_ENGINE / FM1MIDI / DX7_PARAMS / FM1_STRUM
-   本层只做三件事：选音色、把「扫一下」播出来（本地 or MIDI）、诚实地记日志。
+   引擎（UMD 全局）：DX7 / FM_ENGINE / FM1MIDI / DX7_PARAMS / FM1_STRUM / FM1_SEQ
+   本层只做四件事：选音色与和弦、把「扫一下/循环」播出来（本地 or MIDI）、
+   把音色推进设备、诚实地记日志。可测性：定时器与时钟经 window 引用
+   （smoke 用假时钟接管）；业务入口（selectChord/fireGesture）单一通路。
    ========================================================================= */
 (function () {
   'use strict';
@@ -139,14 +189,23 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     { nm: 'E7', notes: [40, 47, 50, 56, 62, 64] },
   ];
   var PAD_KEYS = ['1','2','3','4','5','6','7','8','9','0'];
+  var GESTURE_KEYS = { d: 'down', u: 'up', x: 'chuck' };
+  var IN_LO = 36, IN_HI = 45;                 /* 低音区 C2–A2 → 和弦槽 0–9 */
+  var IN_GEST = { 60: 'down', 62: 'up', 64: 'chuck' };   /* C4/D4/E4 */
 
   var S = {
-    voices: [],          /* {name, d, raw} —— raw = 128 字节 packed */
+    voices: [],          /* {name, d, raw, bank} —— raw = 128 字节 packed */
     sel: -1,
+    selChord: 0,
     spread: 0.09,
-    ctx: null,           /* AudioContext，懒建 */
-    cache: {},           /* 'voiceIdx|note' -> Float32Array（按当前音色时长参数） */
-    midi: { access: null, output: null, log: '' },
+    ctx: null,
+    cache: {},
+    midi: { access: null, output: null, input: null },
+    rawSeen: {},         /* 128 字节 hex 去重 */
+    humanize: { on: true, timingMs: 6, velJitter: 10 },
+    loop: { player: null, on: false, mode: 'rhythm', rhythm: 'folk', bpm: 100, seed: 1 },
+    holdByPad: false,
+    gestureCount: 0,     /* 手势种子计数：同一种子序列永远可复现 */
   };
 
   function log(msg, cls) {
@@ -158,7 +217,21 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     if (cls) console.log('[' + cls + '] ' + msg);
   }
 
+  /* ---- 时钟（可测性钩子：smoke 注入 window.__seqNow 接管） ---- */
+  function perfMs() {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  }
+  function perfSec() {
+    return (window.__seqNow ? window.__seqNow() : perfMs()) / 1000;
+  }
+
   /* ================================================================ 音色 */
+  function hexToBytes(h) {
+    var a = new Uint8Array(h.length / 2);
+    for (var i = 0; i < a.length; i++) a[i] = parseInt(h.substr(i * 2, 2), 16);
+    return a;
+  }
+
   function loadStarter() {
     var Sx = window.FM1_STARTER;
     if (!Sx) { log('⚠ data/starter.js 没加载出来', 'hot'); return; }
@@ -177,12 +250,54 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     }
     for (var i = 0; i < DX7.VOICES_PER_BANK; i++) {
       var raw = packed.slice(i * 128, i * 128 + 128);
-      var d = DX7.decodeVoice(raw);
-      S.voices.push({ name: d.name, d: d, raw: raw, bank: label });
+      pushRawVoice(raw, label);
     }
     rebuildVoiceSel();
     log('✓ 载入 ' + label + '：32 个音色（共 ' + S.voices.length + ' 个）');
     return DX7.VOICES_PER_BANK;
+  }
+
+  function pushRawVoice(raw, label) {
+    var d = DX7.decodeVoice(raw);
+    S.voices.push({ name: d.name, d: d, raw: raw, bank: label });
+    return d;
+  }
+
+  /* 单音色包（data/guitar.js 与外部 FM1_EXT_* 共用）：128 字节 hex + 去重 */
+  function addRawVoices(list, label) {
+    var added = 0;
+    for (var i = 0; list && i < list.length; i++) {
+      var v = list[i];
+      if (!v || typeof v.raw !== 'string') continue;
+      if (S.rawSeen[v.raw]) continue;              /* 逐字节去重 */
+      S.rawSeen[v.raw] = true;
+      pushRawVoice(hexToBytes(v.raw), label);
+      added++;
+    }
+    if (added) rebuildVoiceSel();
+    return added;
+  }
+
+  function loadGuitarPack() {
+    var G = window.FM1_GUITAR;
+    if (!G) { log('⚠ data/guitar.js 没加载出来（吉他音色缺席）', 'hot'); return; }
+    var n = addRawVoices(G.voices, '吉他（原创）');
+    log('✓ 吉他音色包：' + n + ' 个（' + (G.licence || '?') + '，测量数据在 design 字段）');
+  }
+
+  /* 外部音色包：探测 window 上所有 FM1_EXT_*；缺许可字段拒载（不静默） */
+  function loadExternalPacks() {
+    var added = 0;
+    for (var k in window) {
+      if (k.indexOf('FM1_EXT_') !== 0) continue;
+      var pack = window[k];
+      if (!pack || !pack.licence || !pack.licenceText) {
+        log('⚠ 外部音色包 ' + k + ' 缺 licence/licenceText，拒载（权利链必须完整）', 'hot');
+        continue;
+      }
+      added += addRawVoices(pack.voices, k.replace('FM1_EXT_', '').toLowerCase());
+    }
+    if (added) log('✓ 外部音色包：' + added + ' 个');
   }
 
   function rebuildVoiceSel() {
@@ -213,8 +328,8 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     }
   }
   function renderVoiceNote() {
-    $('voice-note').textContent = '共 ' + S.voices.length + ' 个音色。选中音色 = 你希望设备正在响的音色' +
-      '（写入设备请用姊妹项目 fm1-tone-engine 的音色台）。';
+    $('voice-note').textContent = '共 ' + S.voices.length + ' 个音色。本地选中只影响试听；' +
+      '设备要响同样的音色 → ⑤「推送当前音色到设备」（临时，不 SAVE 断电即失）或发 bank（四步仪式）。';
   }
 
   /* ================================================================ 本地试听 */
@@ -238,21 +353,35 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     return buf;
   }
 
+  function scheduleNote(ctx, e, when) {
+    var buf = renderNote(S.sel, e.note, e.tOff - e.tOn);
+    var src = ctx.createBufferSource();
+    src.buffer = ctx.createBuffer(1, buf.length, ctx.sampleRate);
+    src.buffer.copyToChannel ? src.buffer.copyToChannel(buf, 0)
+                             : src.buffer.getChannelData(0).set(buf);
+    var g = ctx.createGain();
+    g.gain.value = e.velocity / 127;   /* 力度近似：render 没有力度入参，README 已注明 */
+    src.connect(g); g.connect(ctx.destination);
+    src.start(when);
+  }
+
+  /* 手势路径：相对时序（现在 + 60ms 余量起） */
   function playEvents(events) {
     var ctx = getCtx();
     if (!ctx) { log('（这个环境没有 WebAudio，只发 MIDI / 只出事件）'); return; }
-    var t0 = ctx.currentTime + 0.06;   /* 留一点调度余量 */
+    var t0 = ctx.currentTime + 0.06;
+    for (var i = 0; i < events.length; i++) scheduleNote(ctx, events[i], t0 + events[i].tOn);
+  }
+
+  /* 循环路径：barStartAbs 是 perfSec() 坐标系，换算到音频钟再调度 */
+  function playEventsAbs(events, barStartAbs) {
+    var ctx = getCtx();
+    if (!ctx) return;
+    var offset = ctx.currentTime - perfSec();
     for (var i = 0; i < events.length; i++) {
-      var e = events[i];
-      var buf = renderNote(S.sel, e.note, e.tOff - e.tOn);
-      var src = ctx.createBufferSource();
-      src.buffer = ctx.createBuffer(1, buf.length, ctx.sampleRate);
-      src.buffer.copyToChannel ? src.buffer.copyToChannel(buf, 0)
-                               : src.buffer.getChannelData(0).set(buf);
-      var g = ctx.createGain();
-      g.gain.value = e.velocity / 127;   /* 力度近似：render 没有力度入参，README 已注明 */
-      src.connect(g); g.connect(ctx.destination);
-      src.start(t0 + e.tOn);
+      var when = barStartAbs + events[i].tOn + offset;
+      if (when < ctx.currentTime) continue;      /* 错过的音符不补（挂起恢复） */
+      scheduleNote(ctx, events[i], when);
     }
   }
 
@@ -261,73 +390,43 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     var out = S.midi.output;
     if (!out) { log('⚠ 没有输出端口', 'hot'); return; }
     var msgs = FM1_STRUM.eventsToMidi(events, 0);
-    var t0 = performance.now();
+    var t0 = perfMs();
     for (var i = 0; i < msgs.length; i++) out.send(msgs[i].bytes, t0 + msgs[i].tMs);
     log('→ 设备：' + msgs.length + ' 条 Note 消息（' +
         events.length + ' 个音符，时间戳调度）。⚠ 已发出 ≠ 设备已发声。');
   }
 
-  function triggerStrum(padIdx) {
-    var chord = CHORDS[padIdx];
-    if (!chord) return;
-    var pattern = document.querySelector('input[name=pattern]:checked');
-    var events = FM1_STRUM.strum(chord.notes, {
-      pattern: pattern ? pattern.value : 'down',
-      palmMute: $('ck-pm').checked,
-      spread: S.spread,
-    });
-    if (S.sel >= 0) playEvents(events);
-    else log('（未选音色：只算了事件，没出声）');
-    if ($('ck-send').checked) sendEvents(events);
-    log('扫 ' + chord.nm + '：' + events.length + ' 个音符，' +
-        (events[events.length - 1].tOn * 1000).toFixed(0) + 'ms 内错峰起音');
+  function sendEventsAbs(events, barStartAbs) {
+    var out = S.midi.output;
+    if (!out) return;
+    var msgs = FM1_STRUM.eventsToMidi(events, 0);
+    var base = barStartAbs * 1000;               /* perfSec() 坐标系 → Web MIDI 毫秒 */
+    for (var i = 0; i < msgs.length; i++) out.send(msgs[i].bytes, base + msgs[i].tMs);
   }
 
-  /* ================================================================ MIDI 连接 */
-  function connectMidi() {
-    if (!FM1MIDI.isSupported()) {
-      log('⚠ ' + FM1MIDI.unsupportedReason(), 'hot');
-      return;
-    }
-    FM1MIDI.requestAccess().then(function (access) {
-      S.midi.access = access;
-      var outputs = FM1MIDI.listOutputs(access);
-      var picked = FM1MIDI.pickOutput(outputs);
-      var html = '';
-      for (var i = 0; i < outputs.length; i++) {
-        var p = outputs[i];
-        html += '<option value="' + esc(p.id) + '">' + esc(FM1MIDI.portLabel(p)) +
-                (FM1MIDI.looksLikeFm1(p) ? ' ★' : '') + '</option>';
-      }
-      $('port-sel').innerHTML = html || '<option value="">（没有输出端口）</option>';
-      if (picked) $('port-sel').value = picked.id;
-      $('port-sel').onchange = function () { refreshPort(); };
-      refreshPort();
-      access.onstatechange = function () { refreshPort(); };
-      log('✓ MIDI 权限已拿到，选好了端口：' + FM1MIDI.portLabel(S.midi.output));
-    }, function (e) {
-      log('⚠ MIDI 连接失败：' + e.message, 'hot');
-    });
-  }
-
-  function refreshPort() {
-    if (!S.midi.access) return;
-    var id = $('port-sel').value;
-    S.midi.output = S.midi.access.outputs.get(id) || null;
-    $('btn-note').disabled = !S.midi.output;
-    $('btn-pmmacro').disabled = !S.midi.output;
-    if (S.midi.output)
-      log('端口：' + FM1MIDI.portLabel(S.midi.output));
-  }
-
-  /* 发单音：真机验证的第一步 —— 设备到底认不认 Note On/Off？ */
   function sendSingleNote() {
     var out = S.midi.output;
     if (!out) return;
-    var t = performance.now();
+    var t = perfMs();
     out.send([0x90, 64, 100], t);
     out.send([0x80, 64, 0], t + 500);
     log('→ 设备：单音 E4（Note On + 500ms 后 Off）。设备出声了吗？这决定演奏路径成不成立。');
+  }
+
+  /* 推送当前音色：155 条实时参数 → 设备编辑缓冲立刻变成这个音色 */
+  function sendPushVoice() {
+    var out = S.midi.output;
+    var v = curVoice();
+    if (!out || !v) return;
+    if (!$('ck-confirm').checked) {
+      log('⚠ 请先勾选「我知道这条路径没在真机上验证过」', 'hot');
+      return;
+    }
+    var msgs = DX7_PARAMS.pushVoice(v.raw, 0);
+    var t = perfMs();
+    for (var i = 0; i < msgs.length; i++) out.send(msgs[i].bytes, t + i * 4);
+    log('→ 设备：整音色推送「' + v.name + '」' + msgs.length + ' 条实时参数消息（间隔 4ms）。' +
+        '设备当前音色应该已经是它 —— 马上扫个弦试试。⚠ 不 SAVE 断电即失；已发出 ≠ 已执行。');
   }
 
   /* 闷音宏：params.js 的设备级闷音（改正在响的音色的包络/反馈） */
@@ -355,6 +454,182 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
         '\n  ⚠ 已发出 ≠ 已执行 —— 正在响的音变闷了吗？');
   }
 
+  /* ================================================================ 手势与循环 */
+  function humanized(events, seed) {
+    if (!S.humanize.on) return events;
+    return FM1_STRUM.humanize(events, { seed: seed,
+      timingMs: S.humanize.timingMs, velJitter: S.humanize.velJitter });
+  }
+
+  function strokeName(s) { return s === 'down' ? '下扫' : s === 'up' ? '上扫' : '哑音'; }
+
+  /* 单一通路：手势按钮 / 键盘 D-U-X / MIDI 键盘高音区全走这里 */
+  function fireGesture(stroke) {
+    var chord = CHORDS[S.selChord];
+    var evs = FM1_STRUM.strum(chord.notes, {
+      pattern: stroke, palmMute: $('ck-pm').checked, spread: S.spread });
+    evs = humanized(evs, FM1_STRUM.barSeed(S.loop.seed, 100000 + (S.gestureCount++)));
+    if (S.sel >= 0) playEvents(evs);
+    else log('（未选音色：只算了事件，没出声）');
+    if ($('ck-send').checked && S.midi.output) sendEvents(evs);
+    log('手势 ' + strokeName(stroke) + ' ' + chord.nm + '：' + evs.length + ' 个音符' +
+        (S.loop.on ? '（循环进行中，已叠加）' : ''));
+  }
+
+  /* buildBar 是 barIndex 的纯函数（读当前和弦/节奏型/BPM/种子）——
+     换和弦、换节奏型、换 BPM 都自然「下一小节生效」，无需重启调度器 */
+  function buildBar(barIndex) {
+    var chord = CHORDS[S.selChord];
+    var rh = S.loop.mode === 'motor'
+      ? { beats: 1, steps: [{ beat: 0, stroke: 'down' }] }
+      : S.loop.rhythm;
+    var beats = (typeof rh === 'string') ? FM1_STRUM.RHYTHMS[rh].beats : rh.beats;
+    var barSec = beats * 60 / S.loop.bpm;
+    var steps = FM1_STRUM.expandRhythm(rh, barSec);
+    var events = [];
+    for (var i = 0; i < steps.length; i++) {
+      var st = steps[i];
+      var evs = FM1_STRUM.strum(chord.notes,
+        { pattern: st.stroke, palmMute: st.palmMute, spread: S.spread });
+      evs = humanized(evs, FM1_STRUM.barSeed(S.loop.seed, barIndex * 8 + i));
+      for (var j = 0; j < evs.length; j++) {
+        var e = evs[j];
+        events.push({ note: e.note, velocity: e.velocity,
+          tOn: e.tOn + st.at, tOff: e.tOff + st.at,
+          string: e.string, stroke: e.stroke });
+      }
+    }
+    return { events: events, barSec: barSec };
+  }
+
+  function deliverLoop(events, barStartAbs) {
+    if (S.sel >= 0) playEventsAbs(events, barStartAbs);
+    if ($('ck-send').checked) sendEventsAbs(events, barStartAbs);
+  }
+
+  function makePlayer() {
+    return FM1_SEQ.createPlayer({
+      now: perfSec,
+      timer: { set: function (fn, ms) { return window.setInterval(fn, ms); },
+               clear: function (id) { return window.clearInterval(id); } },
+      deliver: deliverLoop,
+      buildBar: buildBar,
+    });
+  }
+
+  function startLoop(mode) {
+    if (S.loop.on) return false;
+    S.loop.mode = mode || 'rhythm';
+    S.loop.player = makePlayer();
+    S.loop.on = true;
+    S.loop.player.start();
+    log('▶ 循环开始：' + (S.loop.mode === 'motor' ? '按住连扫' : '节奏型 ' + S.loop.rhythm) +
+        ' @' + S.loop.bpm + ' BPM（换和弦下一小节生效；' +
+        (S.humanize.on ? '人性化开' : '人性化关') + '）');
+    return true;
+  }
+
+  function stopLoop() {
+    if (!S.loop.on) return false;
+    S.loop.on = false;
+    S.loop.player.stop();
+    S.loop.player = null;
+    log('■ 循环停止（已排出的音符自然结束）。');
+    return true;
+  }
+
+  function toggleLoop() { if (S.loop.on) stopLoop(); else startLoop('rhythm'); }
+
+  /* ---- 左手：选中态 ---- */
+  function selectChord(i) {
+    if (i !== Math.floor(i) || i < 0 || i >= CHORDS.length) return;
+    S.selChord = i;
+    var pads = $('pads').children;
+    for (var k = 0; k < pads.length; k++) pads[k].className = (k === i ? 'pad sel' : 'pad');
+    log('选中和弦：' + CHORDS[i].nm + '（按手势键扫它；按住垫 = 连续下扫）');
+  }
+
+  /* 按住垫 = motor strum：按下即选中 + 开「每拍下扫」循环，松手停。
+     若空格循环已在跑，按住只换和弦，不抢循环的开关权。 */
+  function padPress(i) {
+    selectChord(i);
+    if (!S.loop.on) { S.holdByPad = true; startLoop('motor'); }
+  }
+  function padRelease() {
+    if (S.holdByPad && S.loop.on) stopLoop();
+    S.holdByPad = false;
+  }
+
+  /* ================================================================ MIDI 连接 */
+  function connectMidi() {
+    if (!FM1MIDI.isSupported()) {
+      log('⚠ ' + FM1MIDI.unsupportedReason(), 'hot');
+      return;
+    }
+    FM1MIDI.requestAccess().then(function (access) {
+      S.midi.access = access;
+      var outputs = FM1MIDI.listOutputs(access);
+      var picked = FM1MIDI.pickOutput(outputs);
+      var html = '';
+      for (var i = 0; i < outputs.length; i++) {
+        var p = outputs[i];
+        html += '<option value="' + esc(p.id) + '">' + esc(FM1MIDI.portLabel(p)) +
+                (FM1MIDI.looksLikeFm1(p) ? ' ★' : '') + '</option>';
+      }
+      $('port-sel').innerHTML = html || '<option value="">（没有输出端口）</option>';
+      if (picked) $('port-sel').value = picked.id;
+      $('port-sel').onchange = function () { refreshPort(); };
+      refreshPort();
+      /* 输入端口（MIDI 键盘 / 可能的 FM-1 键盘回传，后者未验证） */
+      var inHtml = '', inputs = [];
+      if (access.inputs) access.inputs.forEach(function (p) { inputs.push(p); });
+      for (var j = 0; j < inputs.length; j++) {
+        inHtml += '<option value="' + esc(inputs[j].id) + '">' +
+                  esc(FM1MIDI.portLabel(inputs[j])) + '</option>';
+      }
+      $('in-sel').innerHTML = inHtml || '<option value="">（没有输入端口）</option>';
+      $('in-sel').onchange = function () { refreshInput(); };
+      if (inputs.length) $('in-sel').value = inputs[0].id;   /* 有输入就默认选第一个 */
+      refreshInput();
+      access.onstatechange = function () { refreshPort(); };
+      log('✓ MIDI 权限已拿到，选好了端口：' + FM1MIDI.portLabel(S.midi.output));
+    }, function (e) {
+      log('⚠ MIDI 连接失败：' + e.message, 'hot');
+    });
+  }
+
+  function refreshPort() {
+    if (!S.midi.access) return;
+    var id = $('port-sel').value;
+    S.midi.output = S.midi.access.outputs.get(id) || null;
+    $('btn-note').disabled = !S.midi.output;
+    $('btn-pmmacro').disabled = !S.midi.output;
+    $('btn-push').disabled = !S.midi.output;
+    if (S.midi.output)
+      log('端口：' + FM1MIDI.portLabel(S.midi.output));
+  }
+
+  /* MIDI 输入：低音区选和弦、高音区手势 —— 与页面手势同一条 fireGesture 通路 */
+  function refreshInput() {
+    if (!S.midi.access || !S.midi.access.inputs) return;
+    var id = $('in-sel').value;
+    S.midi.input = S.midi.access.inputs.get(id) || null;
+    if (S.midi.input) {
+      S.midi.input.onmidimessage = onMidiIn;
+      log('输入端口：' + FM1MIDI.portLabel(S.midi.input) +
+          '（低音区 C2–A2 选和弦，C4/D4/E4 = 下/上/哑）');
+    }
+  }
+
+  function onMidiIn(e) {
+    var b = e.data;
+    if (!b || b.length < 3) return;
+    if ((b[0] & 0xF0) !== 0x90 || b[2] === 0) return;   /* 只吃 Note On */
+    var note = b[1];
+    if (note >= IN_LO && note <= IN_HI) { selectChord(note - IN_LO); return; }
+    if (IN_GEST[note]) fireGesture(IN_GEST[note]);
+  }
+
   /* ================================================================ 接线 */
   function buildPads() {
     var host = $('pads');
@@ -363,9 +638,27 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
       pad.className = 'pad';
       pad.innerHTML = '<div class="nm">' + CHORDS[i].nm + '</div>' +
                       '<div class="key">键 ' + PAD_KEYS[i] + '</div>';
-      pad.onclick = function () { triggerStrum(i); };
+      pad.onclick = function () { selectChord(i); };
+      pad.onpointerdown = function () { padPress(i); };
+      pad.onpointerup = function () { padRelease(); };
+      pad.onpointerleave = function () { padRelease(); };
+      pad.onpointercancel = function () { padRelease(); };
       host.appendChild(pad);
     })(i);
+  }
+
+  function setBpm(v) {
+    if (v < 60) v = 60;
+    if (v > 200) v = 200;                 /* 界面输入范围，显式钳制并回显 */
+    S.loop.bpm = v;
+    $('rng-bpm').value = String(v);
+    $('bpm-val').textContent = String(v);
+  }
+
+  function toggleHumanize() {
+    S.humanize.on = !S.humanize.on;
+    $('ck-hum').checked = S.humanize.on;
+    log('人性化：' + (S.humanize.on ? '开（固定种子，可复现）' : '关（完美节拍器）'));
   }
 
   function bindControls() {
@@ -390,33 +683,65 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
         loadFiles(e.dataTransfer.files);
     });
 
-    var radios = document.querySelectorAll('input[name=pattern]');
-    for (var r = 0; r < radios.length; r++) radios[r].onchange = renderSpreadHint;
-    $('ck-pm').onchange = renderSpreadHint;
+    $('ck-pm').onchange = function () {};
     $('rng-spread').oninput = function () {
       S.spread = Number($('rng-spread').value) / 1000;
       $('spread-val').textContent = $('rng-spread').value + ' ms';
     };
+    $('ck-hum').onchange = function () {
+      S.humanize.on = $('ck-hum').checked;
+    };
+    $('rng-humt').oninput = function () {
+      S.humanize.timingMs = Number($('rng-humt').value);
+      $('humt-val').textContent = $('rng-humt').value + ' ms';
+    };
+    $('rng-humv').oninput = function () {
+      S.humanize.velJitter = Number($('rng-humv').value);
+      $('humv-val').textContent = $('rng-humv').value + ' vel';
+    };
+    $('btn-down').onclick = function () { fireGesture('down'); };
+    $('btn-up').onclick = function () { fireGesture('up'); };
+    $('btn-chuck').onclick = function () { fireGesture('chuck'); };
+    $('sel-rhythm').onchange = function () {
+      S.loop.rhythm = $('sel-rhythm').value;
+      if (S.loop.on) log('节奏型 → ' + S.loop.rhythm + '（下一小节生效）');
+    };
+    $('rng-bpm').oninput = function () { setBpm(Number($('rng-bpm').value)); };
+    $('in-seed').onchange = function () {
+      var v = Math.floor(Number($('in-seed').value));
+      S.loop.seed = (v >= 1) ? v : 1;
+      $('in-seed').value = String(S.loop.seed);
+    };
+    $('btn-dice').onclick = function () {
+      S.loop.seed = 1 + Math.floor(Math.random() * 1000000);
+      $('in-seed').value = String(S.loop.seed);
+      log('种子 → ' + S.loop.seed + '（同一种子 + 同一操作序列 = 逐字节可复现）');
+    };
+    $('btn-loop').onclick = toggleLoop;
     $('btn-connect').onclick = connectMidi;
     $('btn-note').onclick = sendSingleNote;
     $('btn-pmmacro').onclick = sendPalmMuteMacro;
+    $('btn-push').onclick = sendPushVoice;
 
     document.addEventListener('keydown', function (e) {
       if (/input|select|textarea/i.test((e.target && e.target.tagName) || '')) return;
+      if (e.repeat) return;
       var k = PAD_KEYS.indexOf(e.key);
-      if (k >= 0 && k < CHORDS.length) triggerStrum(k);
+      if (k >= 0 && k < CHORDS.length) { selectChord(k); return; }
+      var g = GESTURE_KEYS[String(e.key || '').toLowerCase()];
+      if (g) { fireGesture(g); return; }
+      if (e.key === ' ' || e.code === 'Space') {
+        if (e.preventDefault) e.preventDefault();
+        toggleLoop();
+        return;
+      }
+      if (e.key === '[') { setBpm(S.loop.bpm - 5); return; }
+      if (e.key === ']') { setBpm(S.loop.bpm + 5); return; }
+      if (e.key === 'h' || e.key === 'H') toggleHumanize();
     });
   }
 
-  function renderSpreadHint() {
-    var p = document.querySelector('input[name=pattern]:checked');
-    var hint = '';
-    if (p && p.value === 'up') hint = '（上扫建议 60–90ms）';
-    if (p && p.value === 'chuck') hint = '（哑音扫弦建议 40–70ms，音符会被掐得很短）';
-    $('spread-val').textContent = $('rng-spread').value + ' ms ' + hint;
-  }
-
-  /* 自检：进页面先把两条要害路径各验一遍，坏了当场说，不让用户猜 */
+  /* 自检：进页面先把要害路径各验一遍，坏了当场说，不让用户猜 */
   function selfTest() {
     try {
       var ev = FM1_STRUM.strum([40, 47], { pattern: 'down' });
@@ -424,7 +749,18 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
       if (msgs.length !== 4) throw new Error('eventsToMidi 条数不对');
       var v = S.voices[0];
       if (v) DX7.encodeVoice(DX7.decodeVoice(v.raw));
-      log('✓ 自检通过：扫弦引擎 + 字节编解码就绪。');
+      /* 人性化确定性 + 调度器可构造 */
+      var h1 = FM1_STRUM.humanize(ev, { seed: 1, timingMs: 6, velJitter: 10 });
+      var h2 = FM1_STRUM.humanize(ev, { seed: 1, timingMs: 6, velJitter: 10 });
+      if (JSON.stringify(h1) !== JSON.stringify(h2)) throw new Error('人性化种子不确定');
+      var pl = FM1_SEQ.createPlayer({
+        now: function () { return 0; },
+        timer: { set: function () { return 1; }, clear: function () {} },
+        deliver: function () {},
+        buildBar: function () { return { events: [], barSec: 2 }; },
+      });
+      if (typeof pl.start !== 'function') throw new Error('调度器构造不完整');
+      log('✓ 自检通过：扫弦 + 人性化（种子确定） + 调度器 + 字节编解码就绪。');
     } catch (e) {
       log('⚠ 自检失败：' + e.message, 'hot');
     }
@@ -434,8 +770,10 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
   buildPads();
   bindControls();
   loadStarter();
+  loadGuitarPack();
+  loadExternalPacks();
   selfTest();
-  renderSpreadHint();
+  $('spread-val').textContent = $('rng-spread').value + ' ms';
 })();
 </script>
 </body>

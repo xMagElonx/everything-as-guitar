@@ -107,6 +107,34 @@ check(msgs.length === plan1.changes.length && msgs.every(m => M.assertLiveSysex(
   'changesToSysex 的每条消息都通过 assertLiveSysex（7 字节、F0 43 … F7）');
 check(msgs.every(m => m[2] === 0x10), '默认通道 1（字节 2 = 0x10）');
 
+/* ------------------------------------------------------------- ⑥ 整音色推送 */
+section('⑥ pushVoice：128 字节 → 155 条实时单参数消息（往返尺）');
+const pv = P.pushVoice(voices[3], 0);
+check(pv.length === 155, '恰 155 条消息', String(pv.length));
+let pvBad = 0, pvWho = -1;
+for (let i = 0; i < 155; i++) {
+  const expect = P.paramChange(i, P.getParam(voices[3], i), 0);
+  if (DX7.hex(pv[i].bytes) !== DX7.hex(expect)) { pvBad++; if (pvWho < 0) pvWho = i; }
+  if (pv[i].index !== i || pv[i].value !== P.getParam(voices[3], i)) pvBad++;
+}
+check(pvBad === 0, '每条 bytes 与 paramChange 独立复算逐字节一致（含 index/value 伴随字段）', pvWho);
+check(pv.every(m => M.assertLiveSysex(m.bytes)), '全部通过 assertLiveSysex（7 字节无校验和）');
+check(pv[134].bytes[3] === 0x01 && pv[134].bytes[5] === voices[3][110] & 31,
+  '算法参数走全局区 pp=01（真机锚点同路）');
+/* 重建尺：按推送序列用 setParam 从零重建，必须逐字节还原 ——
+   这是「推送出去的消息集合 ≡ 音色本身」的硬证明 */
+let rebuildBad = 0, rebuildWho = '';
+for (let vi = 0; vi < 32; vi++) {
+  const src = voices[vi];
+  const msgs = P.pushVoice(src, 0);
+  const rebuilt = new Uint8Array(128);
+  for (const m of msgs) P.setParam(rebuilt, m.index, m.value);
+  if (!bytesEq(rebuilt, src)) { rebuildBad++; if (!rebuildWho) rebuildWho = '音色 ' + vi; }
+}
+check(rebuildBad === 0, '32 音色 × pushVoice → setParam 重建全部逐字节还原', rebuildWho);
+throws(() => P.pushVoice(new Uint8Array(10)), '128', '非 128 字节被拒');
+throws(() => P.pushVoice(voices[3], 16), '0-15', '通道 16 越界');
+
 /* ------------------------------------------------------------- 结论 */
 console.log('\n' + (fail === 0 ? `结论：全部通过（${pass} 项断言）。` : `结论：${fail} 项失败 / ${pass} 项通过。`));
 process.exit(fail === 0 ? 0 : 1);

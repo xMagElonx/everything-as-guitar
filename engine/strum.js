@@ -157,6 +157,159 @@
     return out;
   }
 
+  /* ---- 确定性随机：mulberry32（ES5 手写 imul，不依赖 Math.imul） ----
+     为什么不用 Math.random：循环扫弦要求「同一种子第 N 小节永远逐字节相同」
+     （测试断言 + 跨引擎复现），Math.random 给不了。
+     参考值由 Python 独立实现算出写死在 strum_test ⑪ —— 两个实现互相咬合，
+     任何一边写错都炸（防「同一个 bug 复制两份」）。 */
+  function imul(a, b) {
+    var ah = (a >>> 16) & 0xffff, al = a & 0xffff;
+    var bh = (b >>> 16) & 0xffff, bl = b & 0xffff;
+    return ((al * bl) + (((ah * bl + al * bh) << 16) >>> 0)) | 0;
+  }
+  function mulberry32(seed) {
+    if (seed !== Math.floor(seed) || seed < 1)
+      throw new Error('seed 必须是 ≥1 的整数，实际 ' + seed);
+    var a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) | 0;
+      var t = imul(a ^ (a >>> 15), 1 | a);
+      t = (t + imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* 事件组校验（humanize 与 eventsToMidi 共用的语义：非空 + 每条合法） */
+  function checkEvents(events) {
+    if (!events || typeof events.length !== 'number' || events.length === 0)
+      throw new Error('events 必须是非空数组');
+    for (var i = 0; i < events.length; i++) {
+      var e = events[i];
+      if (e.note !== Math.floor(e.note) || e.note < 0 || e.note > 127)
+        throw new Error('event note 越界：' + e.note);
+      if (e.velocity !== Math.floor(e.velocity) || e.velocity < 1 || e.velocity > 127)
+        throw new Error('event velocity 越界：' + e.velocity);
+      if (!(e.tOn >= 0) || !(e.tOff > e.tOn))
+        throw new Error('event 时序不合法 tOn=' + e.tOn + ' tOff=' + e.tOff);
+    }
+  }
+
+  /* ---- 人性化：对事件组做确定性抖动（新数组，不改输入） ----
+     opts.seed     必填 ≥1 整数 —— 同一 (events, opts) 永远逐字段相同
+     opts.timingMs 每弦 tOn 偏移幅度（毫秒，≥0，默认 0 = 关）
+     opts.velJitter 每弦 velocity 偏移幅度（≥0，默认 0 = 关）
+     规则：
+       · tOff 与 tOn 同步平移 —— gate 时值不变，闷音/chuck 的语义不被抖动破坏
+       · tOn 平移后 < 0 时钳到 0（小节第一根弦不能跑到上一小节去）
+       · velocity 合成后钳到 1..127 —— 钳的是我们自己抖出来的量，
+         不是掩码用户的显式参数，与 strum() 的「无隐藏钳制」不冲突
+       · timingMs/velJitter 为 0 的轴完全不动（连取整都不做）—— 保证
+         「关人性化 = 纯 strum 输出」逐字节成立 */
+  function humanize(events, opts) {
+    checkEvents(events);
+    opts = opts || {};
+    if (opts.seed == null)
+      throw new Error('humanize 缺 seed：确定性随机必须有种子');
+    var rng = mulberry32(opts.seed);
+    var timingMs = opts.timingMs == null ? 0 : opts.timingMs;
+    var velJitter = opts.velJitter == null ? 0 : opts.velJitter;
+    if (!(typeof timingMs === 'number') || !isFinite(timingMs) || timingMs < 0)
+      throw new Error('timingMs 必须是 ≥0 的有限数，实际 ' + timingMs);
+    if (!(typeof velJitter === 'number') || !isFinite(velJitter) || velJitter < 0)
+      throw new Error('velJitter 必须是 ≥0 的有限数，实际 ' + velJitter);
+
+    var out = [];
+    for (var i = 0; i < events.length; i++) {
+      var e = events[i];
+      var o = { note: e.note, velocity: e.velocity, tOn: e.tOn, tOff: e.tOff,
+                string: e.string, stroke: e.stroke };
+      if (timingMs > 0) {
+        var dT = (rng() * 2 - 1) * (timingMs / 1000);
+        o.tOn = Math.round((e.tOn + dT) * 1e6) / 1e6;
+        if (o.tOn < 0) o.tOn = 0;
+        o.tOff = Math.round((o.tOn + (e.tOff - e.tOn)) * 1e6) / 1e6;
+      }
+      if (velJitter > 0) {
+        var dV = Math.round((rng() * 2 - 1) * velJitter);
+        o.velocity = Math.min(127, Math.max(1, e.velocity + dV));
+      }
+      out.push(o);
+    }
+    return out;
+  }
+
+  /* ---- 节奏型表：显式步进数据，不用字符串 DSL ----
+     beats = 每小节拍数（四分音符），steps 里 beat 允许小数（反拍）。
+     stroke ∈ PATTERNS 键集；palmMute: true 的步把事件级闷音传给 strum()。 */
+  var RHYTHMS = {
+    folk:   { beats: 4, steps: [
+      { beat: 0, stroke: 'down' }, { beat: 1, stroke: 'down' },
+      { beat: 2, stroke: 'up' },   { beat: 3, stroke: 'up' }] },
+    folkUp: { beats: 4, steps: [
+      { beat: 0, stroke: 'down' }, { beat: 1, stroke: 'down' },
+      { beat: 2, stroke: 'up' },   { beat: 3, stroke: 'up' },
+      { beat: 3.5, stroke: 'up' }] },
+    punk:   { beats: 4, steps: (function () {
+      var s = [];
+      for (var k = 0; k < 8; k++) s.push({ beat: k * 0.5, stroke: 'chuck' });
+      return s; })() },
+    ballad: { beats: 4, steps: [
+      { beat: 0, stroke: 'down' }, { beat: 2, stroke: 'up' },
+      { beat: 3, stroke: 'up' }] },
+  };
+
+  /* ---- 节奏型 → 一小节内的扫弦时刻表 ----
+     rhythm: 'folk' 等名字，或同构 { beats, steps } 对象
+     barSec: 一小节的秒数（= beats 拍的总时长）
+     返回 [{ stroke, at, palmMute }]，at = 相对小节起点的秒。
+     校验全 throw：未知名字、beat 越界、stroke 不在 PATTERNS、空 steps。 */
+  function expandRhythm(rhythm, barSec) {
+    if (!isPosNum(barSec))
+      throw new Error('barSec 必须是正数，实际 ' + barSec);
+    var r;
+    if (typeof rhythm === 'string') {
+      r = RHYTHMS[rhythm];
+      if (!r) throw new Error('未知节奏型：' + rhythm +
+        '（可用：' + Object.keys(RHYTHMS).join(' / ') + '，或传 {beats, steps} 对象）');
+    } else if (rhythm && typeof rhythm === 'object') {
+      r = rhythm;
+    } else {
+      throw new Error('rhythm 必须是节奏型名字或 {beats, steps} 对象');
+    }
+    if (r.beats !== Math.floor(r.beats) || r.beats < 1)
+      throw new Error('rhythm.beats 必须是 ≥1 的整数，实际 ' + r.beats);
+    if (!r.steps || typeof r.steps.length !== 'number' || r.steps.length === 0)
+      throw new Error('rhythm.steps 必须是非空数组');
+    var perBeat = barSec / r.beats;
+    var out = [];
+    for (var i = 0; i < r.steps.length; i++) {
+      var st = r.steps[i];
+      if (typeof st.beat !== 'number' || !isFinite(st.beat) ||
+          st.beat < 0 || st.beat >= r.beats)
+        throw new Error('step.beat 必须在 [0, beats) 内，实际 ' + st.beat +
+                        '（beats=' + r.beats + '）');
+      if (typeof st.stroke !== 'string' || !PATTERNS[st.stroke])
+        throw new Error('step.stroke 必须是 ' +
+          Object.keys(PATTERNS).join(' / ') + '，实际 ' + st.stroke);
+      out.push({ stroke: st.stroke, at: st.beat * perBeat,
+                 palmMute: !!st.palmMute });
+    }
+    return out;
+  }
+
+  /* ---- 循环小节的种子派生：第 i 小节用 base + i*7919 ----
+     7919 是第 1000 个质数 —— 偏移量本身没有魔力，魔力在「写死、可测」：
+     同一 base 下 bar0 与 bar1 必不同、任意次起停后第 N 小节逐字节相同。 */
+  function barSeed(base, i) {
+    if (base !== Math.floor(base) || base < 1)
+      throw new Error('base 必须是 ≥1 的整数，实际 ' + base);
+    if (i !== Math.floor(i) || i < 0)
+      throw new Error('barIndex 必须是 ≥0 的整数，实际 ' + i);
+    return base + i * 7919;
+  }
+
   return { PATTERNS: PATTERNS, strum: strum, eventsToMidi: eventsToMidi,
-           CHUCK_GATE: CHUCK_GATE, MUTE_GATE: MUTE_GATE };
+           CHUCK_GATE: CHUCK_GATE, MUTE_GATE: MUTE_GATE,
+           mulberry32: mulberry32, humanize: humanize,
+           RHYTHMS: RHYTHMS, expandRhythm: expandRhythm, barSeed: barSeed };
 });

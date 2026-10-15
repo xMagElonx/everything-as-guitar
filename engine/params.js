@@ -281,6 +281,31 @@
     return out;
   }
 
+  /* ==========================================================================
+     整音色推送：128 字节 packed → 155 条实时单参数消息
+     ----------------------------------------------------------------------------
+     这是「页面音色 → 设备音色」的直通车：不刷固件、不发整包 bank，
+     把音色的每个参数用 V15 的实时单参数消息发过去，设备当前编辑缓冲
+     立刻变成这个音色，紧接着的 Note 消息就用它响。不 SAVE 断电即失。
+
+     纯函数：返回 [{ bytes, index, value }]（bytes = 7 字节 SysEx）。
+     校验从严：任何一个参数值超出它自己的合法区间就抛 —— 出厂 ROM 音色
+     里有越面板值（127 填充、失谐 15），对着设备发未定义行为的消息
+     比报错危险得多；本仓库工具生成的音色（encodeVoice 产物）必然合法。
+     ========================================================================== */
+  function pushVoice(data, channel) {
+    checkData(data);
+    if (channel == null) channel = 0;
+    if (channel !== Math.floor(channel) || channel < 0 || channel > 15)
+      throw new Error('MIDI 通道必须是 0-15 的整数，实际 ' + channel);
+    var out = [];
+    for (var i = 0; i < PARAM_COUNT; i++) {
+      var v = getParam(data, i);
+      out.push({ bytes: paramChange(i, v, channel), index: i, value: v });
+    }
+    return out;
+  }
+
   /* 把整张表摊平成可打印的清单（文档/调试用） */
   function listParams() {
     var rows = [];
@@ -301,5 +326,6 @@
     getParam: getParam, setParam: setParam,
     paramChange: paramChange, paramInfo: paramInfo, listParams: listParams,
     palmMute: palmMute, changesToSysex: changesToSysex,
+    pushVoice: pushVoice,
   };
 });

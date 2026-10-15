@@ -1,83 +1,126 @@
 # fm1-guitar
 
-**Play the M-VAVE FM-1 like a guitar — in the browser.** Chord pads, real
-strumming (down/up strokes, per-string velocity, muted chucks), palm mute,
-local audition through a built-in FM engine, and MIDI output to the device.
+**Play the M-VAVE FM-1 like a guitar — in the browser. Or rather: give a
+synthesizer a guitarist's playing semantics.** Chord pads are your fretting
+hand, gesture keys are your strumming hand (down / up / muted chug), space
+toggles a rhythm loop, holding a pad gives a continuous strum — and every
+voice gets strummed, not just guitar patches.
 
 This is the *performance* counterpart to
 [fm1-tone-engine](https://github.com/xMagElonx/fm1-tone-engine) (the *voice*
-bench: search, edit, write). The two projects are separate; they share the
-byte-level engine, forked verbatim — see [`ENGINE-FORK.md`](ENGINE-FORK.md).
+bench: search, edit, write). Separate repos; the byte-level engine is forked
+verbatim — see [`ENGINE-FORK.md`](ENGINE-FORK.md).
 
-⚠ **Hardware status — testers welcome.** Everything here runs and is covered
-by 168 test assertions, but **the device-facing paths have never touched a
-real FM-1**:
+⚠ **Hardware status — testers welcome.** Everything here runs, covered by
+**279 test assertions**, but **the device-facing paths have never touched a
+real FM-1**. The biggest open question and the full unverified list are below.
 
-- **MIDI Note On/Off for playing** — upstream evidence only covers SysEx
-  (bank dumps, single-parameter messages). Whether the FM-1 responds to
-  channel Note messages at all is the single biggest open question. The
-  page has a **"发单音" (send single note)** button exactly for testing this
-  first.
-- **The palm-mute macro** (`F0 43 10 pp qq vv F7`, single-parameter live
-  write, V15 firmware) — one device-verified anchor exists from the
-  community, the full path has not been run on hardware.
-
-「字节已发出」≠「设备已发声/已执行」。 If you have the machine: five minutes
+「Bytes sent」≠「device played it」。 If you have the machine: five minutes
 over **USB**, and negative results are the most useful ones —
 [open an issue](../../issues).
 
 ---
 
-## What it does
+## How to play (keyboard map)
 
-| Layer | What | Proven by |
-|---|---|---|
-| Byte codec | DX7 packed voice / bank parse & rebuild | `tools/dx7_test.mjs` — byte-identical round-trip on all 32 bundled voices |
-| FM audition | Pure-JS 6-operator FM render of any DX7 voice | `tools/starter_test.mjs` — every bundled voice renders audible & finite |
-| Strum engine | chord + pattern → timed, graded note events | `tools/strum_test.mjs` — exact sequences, independently hand-computed |
-| MIDI out | Note On/Off with timestamp scheduling; bank/lives SysEx rulers | `tools/midi_test.mjs` + `tools/smoke.mjs` scenario B — page bytes vs independent recomputation |
-| Palm mute (device) | 155-param VCED live-write macro | `tools/param_test.mjs` — device-verified SysEx anchor reproduced |
+| Key | Action |
+|---|---|
+| `1`–`0` | Select chord (E Em F G C D Dm A Am E7) — selecting is silent, like fretting |
+| `D` / `U` / `X` | Gesture: down strum / up strum / muted chug (one per press) |
+| `Space` | Rhythm loop on/off (folk / folkUp / punk / ballad, adjustable BPM) |
+| `[` / `]` | BPM −5 / +5 |
+| `H` | Humanize toggle (±6 ms timing, ±10 velocity per string; seeded, reproducible) |
+| **Hold a pad** | Continuous strum (motor strum); release to stop |
 
-Two palm mutes, on purpose, documented apart:
+**MIDI keyboard input**: low zone C2–A2 (36–45) selects chord slots, high
+zone C4/D4/E4 = down/up/chug — with a MIDI keyboard this is the VST
+one-hand playing posture. (Slots map chromatically: G2 picks the 8th pad,
+which is A, not "G major".)
 
-- **Event-level** (strum engine): notes get very short gates — playing
-  technique, affects both local audition and MIDI.
-- **Device-level** (`DX7_PARAMS.palmMute`): rewrites decay envelopes +
-  feedback of the *sounding* voice over live SysEx — timbre, unverified.
+## Where the sound comes from
 
-## Run it
+- **32 CC0 starter voices** + **2 original guitar voices** (`data/guitar.js`:
+  AC PLUCK acoustic pluck, EL GTR SUS clean electric). The guitar voices are
+  **measurement-driven**: offline render → measure attack time / spectral
+  centroid / decay slope → iterate until targets are met. The measurements
+  live in each voice's `design` field; `tools/voice_lab.mjs` re-runs them.
+- Every voice can be strummed — **the strum engine is voice-agnostic**;
+  strumming a bell works fine.
+- Load your own `.syx` banks at runtime; license-vetted external packs can
+  go into `data/external/` (inclusion criteria in
+  [`docs/voice-sources.md`](docs/voice-sources.md); packs missing licence
+  fields are **refused** with a log line, never silently loaded).
 
-Double-click `index.html` (Chrome / Edge / Opera for Web MIDI). No install,
-no build, no account, no network. Pick a voice, click a chord pad or press
-keys **1–0**, flip patterns. Own `.syx` banks can be loaded at runtime
-(files never leave your machine).
+## Hardware mapping (three steps on the real thing)
+
+1. **One-time setup**: USB-C to the computer (not the 3.5mm TRS) → set
+   **POLY** via EDIT → check MIDI channel = 1 under **GLO** → **turn ARP and
+   SEQ off** (so they don't hijack incoming Notes).
+2. **Make the device play your voice**: "push voice to device" sends all
+   155 VCED parameters of the current voice as live single-parameter writes
+   (`pushVoice` in `engine/params.js`) — effective immediately, no SAVE
+   needed; hold **SAVE** on the device to keep it.
+3. **Play**: the actions live on the page / computer keyboard / MIDI
+   keyboard (table above); the device only sounds — it is the voice, the
+   outside is the right hand.
+
+## Five routes to standalone playing (no-flash → flash)
+
+| Route | Computer-free? | Cost | Status |
+|---|---|---|---|
+| ① This page + computer brain | ✗ | zero | **this repo** |
+| ② Phone + Bluetooth MIDI (responsive page; FM-1 has BLE; iOS Web MIDI limits stated honestly) | phone in pocket | tiny | adapted here |
+| ③ Stock ARP/SEQ squeezed | ✓ | can't do strumming (ARP is monophonic, SEQ is hand-recorded) | built into the device |
+| ④ Flash existing firmware (FoMni already strums natively, GPL) | ✓ | becomes someone else's instrument | exists in the community |
+| ⑤ Own firmware (Optimist modular parts + Felucca browser simulator first; official updater flashes back to stock) | ✓ | weeks of embedded work; nothing touches hardware until the simulator is green | long-term |
+
+## Unverified list (the hardware is the judge)
+
+- **MIDI Note On/Off for playing** — upstream evidence only covers SysEx.
+  Whether the FM-1 responds to channel Note messages at all is **the single
+  biggest open question**; the "send single note" button is test #1.
+- **pushVoice**: acceptance of all 155 parameters, immediacy, SAVE rules.
+- **Polyphony**: manual claims up to 12 voices in POLY (a claim, not a
+  measurement); 6-note chords untested.
+- **Note-stream stability under loop playback**; whether external Notes get
+  hijacked by ARP/SEQ if left on.
+- **After a bank dump**: manual says "auto-saves after a short delay" vs
+  community measurement "hold SAVE" — contradiction, awaiting arbitration.
+- **The FM-1's own 27-key keyboard** as a USB MIDI controller (if it works,
+  everything happens on the device itself).
+- **No Program Change is sent**: PC support unverified, not assumed.
 
 ## Tests
 
 ```
-node tools/dx7_test.mjs       # ① byte codec round-trip on real bytes (22)
-node tools/starter_test.mjs   # ② every bundled voice renders audible (9)
-node tools/param_test.mjs     # ③ 155-param table + SysEx anchor (19)
+node tools/dx7_test.mjs       # ① byte codec round-trip (22)
+node tools/starter_test.mjs   # ② every bundled voice renders audible + guitar targets met (15)
+node tools/param_test.mjs     # ③ 155-param table + pushVoice round-trip + SysEx anchor (26)
 node tools/midi_test.mjs      # ④ transport + device sim (36)
-node tools/strum_test.mjs     # ⑤ strum engine, exact sequences (52)
-node tools/smoke.mjs          # ⑥ page end-to-end, two scenarios (30)
+node tools/strum_test.mjs     # ⑤ strum / humanize / rhythms / scheduler (123)
+node tools/smoke.mjs          # ⑥ page end-to-end, two scenarios (57)
 ```
 
-All six exit 0, **168 assertions**, all data ships with the repo — no SKIP
-paths, nothing to download. Fresh `git clone` → run → green (LF discipline
-is enforced by `.gitattributes`; on Windows a CRLF checkout breaks the smoke
-test by design, so that file must not be removed).
+All six exit 0, **279 assertions**. Fresh `git clone` → run → green. The
+external-pack section **loudly SKIPs** when `data/external/` is empty
+(no bytes is the rights-chain norm, not a failure). LF discipline is
+enforced by `.gitattributes`; a CRLF checkout breaks the smoke test by
+design — that file must not be removed.
 
 ## Legal
 
-MIT (code) + CC0 1.0 (the 32 bundled voices). **No third-party voice bytes
-are distributed**; user-loaded banks and runtime-fetched data are not part of
-this distribution. Details in [`LICENSE`](LICENSE) and [`ENGINE-FORK.md`](ENGINE-FORK.md).
+MIT (code) + CC0 1.0 (the 34 bundled voices: 32 starter + 2 original
+guitars). **No third-party voice bytes are distributed**; the external-pack
+pipeline only admits chains that can be vetted (criteria and current state
+in [`docs/voice-sources.md`](docs/voice-sources.md)). Details in
+[`LICENSE`](LICENSE) and [`ENGINE-FORK.md`](ENGINE-FORK.md).
 
 ## Roadmap
 
-- v0.1 (this): chord pads + strum + event mute + local audition + MIDI out
+- v0.2 (this repo): VST-style strummer (gestures + loop + motor strum +
+  humanize) + original guitar voices + push-to-device + MIDI keyboard input
+  + external-pack pipeline
+- v0.1: chord pads + strum + event mute + local audition + MIDI out
 - next: hammer-on / pull-off / bend macros (device-level, like palm mute),
-  strum-pattern editor, technique voice pack (existing clean-license patches
-  first; self-tuned voices only measurement-driven)
+  strum-pattern editor, hardware-test feedback folded back in
 - later: a firmware route (JieLi AC791N, simulator-first) — separate decision

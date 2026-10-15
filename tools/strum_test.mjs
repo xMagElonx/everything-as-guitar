@@ -7,6 +7,7 @@ import path from 'node:path';
 const require_ = createRequire(import.meta.url);
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const S = require_(path.join(ROOT, 'engine', 'strum.js'));
+const SEQ = require_(path.join(ROOT, 'engine', 'seq.js'));
 const DX7 = require_(path.join(ROOT, 'engine', 'dx7.js'));
 
 let pass = 0, fail = 0;
@@ -129,6 +130,226 @@ check(JSON.stringify(S.strum(E6, { pattern: 'down' })) ===
       JSON.stringify(S.strum(E6, { pattern: 'down' })), '两次调用逐字段相同');
 const two = S.strum([40, 47], { pattern: 'down', spread: 0.06 });
 check(eq(two.map(e => Math.round(e.tOn * 1000)), [0, 60]), '双弦扫弦：间隔 = spread/(n-1) = 60ms');
+
+/* ------------------------------------------------------------- ⑩ 节奏型 */
+section('⑩ RHYTHMS / expandRhythm：节奏型 → 一小节扫弦时刻表');
+const folk = S.expandRhythm('folk', 2.0);
+check(folk.length === 4, 'folk：4 步');
+check(eq(folk.map(s => s.stroke), ['down', 'down', 'up', 'up']), 'folk 手法序列 down-down-up-up');
+check(eq(folk.map(s => s.at), [0, 0.5, 1.0, 1.5]), 'folk@120BPM 时刻 0/0.5/1.0/1.5（手算）');
+check(folk.every(s => s.palmMute === false), 'palmMute 默认 false');
+const folkUp = S.expandRhythm('folkUp', 2.0);
+check(folkUp.length === 5 && folkUp[4].at === 1.75, 'folkUp：第 5 步反拍 3.5 → 1.75s');
+const punk = S.expandRhythm('punk', 4);   // 60BPM：一拍一秒，八分 = 0.5s
+check(eq(punk.map(s => s.at), [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]), 'punk：8 个八分（手算）');
+check(punk.every(s => s.stroke === 'chuck'), 'punk 全部 chuck');
+const ballad = S.expandRhythm('ballad', 2.0);
+check(eq(ballad.map(s => [s.stroke, s.at]),
+  [['down', 0], ['up', 1], ['up', 1.5]]), 'ballad：down 空半小节 up-up');
+const custR = S.expandRhythm({ beats: 3, steps: [{ beat: 2.5, stroke: 'down' }] }, 3);
+check(custR.length === 1 && custR[0].at === 2.5, '自定义节奏型 {beats,steps}：beat 2.5/barSec3 → 2.5s');
+const pmR = S.expandRhythm({ beats: 4, steps: [{ beat: 0, stroke: 'down', palmMute: true }] }, 2);
+check(pmR[0].palmMute === true, '步级 palmMute 透传');
+throws(() => S.expandRhythm('nope', 2), '未知节奏型', '未知节奏型名');
+throws(() => S.expandRhythm('folk', 0), '正数', 'barSec = 0');
+throws(() => S.expandRhythm('folk', -1), '正数', 'barSec 负');
+throws(() => S.expandRhythm(null, 2), '{beats, steps}', 'rhythm 非对象非名字');
+throws(() => S.expandRhythm({ beats: 0, steps: [{ beat: 0, stroke: 'down' }] }, 2), 'beats', 'beats = 0');
+throws(() => S.expandRhythm({ beats: 4, steps: [] }, 2), '非空数组', '空 steps');
+throws(() => S.expandRhythm({ beats: 4, steps: [{ beat: 4, stroke: 'down' }] }, 2), '[0, beats)', 'beat 越界（=beats）');
+throws(() => S.expandRhythm({ beats: 4, steps: [{ beat: -0.5, stroke: 'down' }] }, 2), '[0, beats)', 'beat 负');
+throws(() => S.expandRhythm({ beats: 4, steps: [{ beat: 0, stroke: 'sideways' }] }, 2), 'step.stroke', 'stroke 未知');
+
+/* ------------------------------------------------------------- ⑪ 人性化 */
+section('⑪ humanize：确定性抖动（mulberry32，参考值来自 Python 独立实现）');
+const REF = {
+  1: [0.6270739406, 0.0027357212, 0.52744704, 0.9810509675, 0.9683778982, 0.281103503],
+  42: [0.6011037519, 0.448290559, 0.8524657935, 0.6697340414, 0.1748138987, 0.5265925422],
+  123456: [0.3823330435, 0.7972629075, 0.9965302374, 0.1600116848, 0.2085719788, 0.2328370977],
+};
+let refOk = true;
+for (const seed of [1, 42, 123456]) {
+  const r = S.mulberry32(seed);
+  for (let i = 0; i < 6; i++)
+    if (Math.abs(r() - REF[seed][i]) > 1e-9) refOk = false;
+}
+check(refOk, 'mulberry32 前 6 输出与 Python 独立实现逐项咬合（seed 1/42/123456）');
+throws(() => S.mulberry32(0), '≥1', 'seed 0');
+throws(() => S.mulberry32(1.5), '整数', 'seed 非整数');
+
+const ev2 = S.strum([40, 47], { pattern: 'down', spread: 0.06, gate: 1.2 });
+const h1 = S.humanize(ev2, { seed: 1, timingMs: 6, velJitter: 10 });
+/* 手算（seed 1，每事件消耗两个随机数：先时机后力度）：
+   ev0: dT=(2*0.6270739406-1)*6ms=+1.5249ms → tOn=0.001525（取整 1e-6）
+        dV=round((2*0.0027357212-1)*10)=-10 → vel 112-10=102
+   ev1: dT=(2*0.52744704-1)*6ms=+0.3294ms → tOn=0.060329
+        dV=round((2*0.9810509675-1)*10)=+10 → vel 76+10=86 */
+check(eq(h1.map(e => e.tOn), [0.001525, 0.060329]), 'tOn 偏移精确到微秒（手算 seed=1）');
+check(eq(h1.map(e => e.velocity), [102, 86]), 'velocity 抖动 -10/+10（手算）');
+check(h1.every(e => Math.abs(e.tOff - e.tOn - 1.2) < 1e-9), 'gate 保形：tOff 随 tOn 平移');
+check(h1[0].tOff === 1.201525 && h1[1].tOff === 1.260329, 'tOff 取整同样到微秒');
+check(eq(h1.map(e => e.note), [40, 47]) && h1[0].string === 0 && h1[1].stroke === 1,
+  'note/string/stroke 原样保留');
+
+check(JSON.stringify(S.humanize(ev2, { seed: 1, timingMs: 6, velJitter: 10 })) ===
+      JSON.stringify(h1), '同 seed 同输入两次 → 逐字节相同');
+check(JSON.stringify(S.humanize(ev2, { seed: 2, timingMs: 6, velJitter: 10 })) !==
+      JSON.stringify(h1), '不同 seed → 结果不同');
+throws(() => S.humanize(ev2, {}), '缺 seed', '缺 seed → 报错（不确定性是禁止的）');
+
+/* 关人性化 = 恒等变换：0 幅度的轴完全不动（连取整都不做） */
+const h0 = S.humanize(ev2, { seed: 999, timingMs: 0, velJitter: 0 });
+check(JSON.stringify(h0) === JSON.stringify(ev2), 'timingMs=0 + velJitter=0 → 与纯 strum 逐字节相同');
+
+/* 边界钳制（消耗顺序：timing=0 时时机随机数不消耗，velocity 用第 1 个输出）
+   seed 123456 首输出 0.3823 → dV=round((0.7647-1)*30)=-7 → 2-7=-5 → 钳 1
+   seed 1      首输出 0.6271 → dV=round(0.2541*30)=+8  → 120+8=128 → 钳 127
+   seed 123456 首输出 0.3823 → dT=(0.7647-1)*10ms=-2.353ms → 0.001-0.00235<0 → 钳 0 */
+const one = (vel, tOn) => [{ note: 60, velocity: vel, tOn: tOn, tOff: tOn + 0.4, string: 0, stroke: 0 }];
+check(S.humanize(one(2, 0.1), { seed: 123456, velJitter: 30 })[0].velocity === 1,
+  'vel 2 + 抖 -7 → 钳到 1（钳自己的抖动量，非掩码参数）');
+check(S.humanize(one(120, 0.1), { seed: 1, velJitter: 30 })[0].velocity === 127,
+  'vel 120 + 抖 +8 → 钳到 127');
+check(S.humanize(one(64, 0.001), { seed: 123456, timingMs: 10 })[0].tOn === 0,
+  'tOn 平移后 <0 → 钳到 0（不能跑进上一小节）');
+
+/* 200 组 seed 抽样：无一与原事件全同（防「抖动恒 0」假通过），且全部在界内 */
+let allDiffer = true, inBounds = true;
+for (let sd = 1; sd <= 200; sd++) {
+  const h = S.humanize(ev, { seed: sd, timingMs: 6, velJitter: 10 });
+  if (JSON.stringify(h) === JSON.stringify(ev)) allDiffer = false;
+  for (let i = 0; i < h.length; i++) {
+    if (Math.abs(h[i].tOn - ev[i].tOn) > 0.006 + 1e-9) inBounds = false;
+    if (Math.abs(h[i].velocity - ev[i].velocity) > 10) inBounds = false;
+  }
+}
+check(allDiffer, '200 组 seed 抽样：无一与原事件全同');
+check(inBounds, '200 组 seed 抽样：|ΔtOn|≤6ms 且 |Δvel|≤10 全部成立');
+
+throws(() => S.humanize([], { seed: 1 }), '非空数组', '空事件组');
+throws(() => S.humanize([{ note: 200, velocity: 64, tOn: 0, tOff: 1 }], { seed: 1 }), '越界', 'note 200');
+throws(() => S.humanize(ev2, { seed: 1, timingMs: -1 }), '≥0', 'timingMs 负');
+throws(() => S.humanize(ev2, { seed: 1, velJitter: -1 }), '≥0', 'velJitter 负');
+throws(() => S.humanize(ev2, { seed: 0, timingMs: 6 }), '≥1', 'seed 0');
+
+/* ------------------------------------------------------------- ⑫ barSeed */
+section('⑫ barSeed：循环小节的种子派生（写死的偏移，可测）');
+check(S.barSeed(7, 0) === 7, 'bar0 = base 本身');
+check(S.barSeed(7, 1) === 7 + 7919, 'bar1 = base + 7919');
+check(S.barSeed(7, 5) === 7 + 5 * 7919, 'bar5 线性派生');
+check(S.barSeed(1, 0) !== S.barSeed(1, 1), '相邻小节种子必不同');
+throws(() => S.barSeed(0, 0), '≥1', 'base 0');
+throws(() => S.barSeed(1, -1), '≥0', 'barIndex 负');
+throws(() => S.barSeed(1.5, 0), '整数', 'base 非整数');
+
+/* ------------------------------------------------------------- ⑬ 调度器 */
+section('⑬ FM1_SEQ.createPlayer：lookahead 调度（手动假时钟，不睡觉）');
+
+/* 手动档时钟：pending 记录 {fn, at, id, every}，advance 推进假时间并按时触发。
+   set 模拟 setInterval：触发后重臂（除非 clear 过）—— 一次性假定时器
+   会让 lookahead 循环只走一步，什么都测不到。 */
+let fakeNow = 100;                 // 秒
+let pending = [];
+let nextId = 1;
+const clearedIds = new Set();
+const manualTimer = {
+  set(fn, ms) { const id = nextId++; pending.push({ fn, at: fakeNow + ms / 1000, id, every: ms / 1000 }); return id; },
+  clear(id) { clearedIds.add(id); pending = pending.filter(p => p.id !== id); },
+};
+function advance(sec) {
+  const target = fakeNow + sec;
+  for (;;) {
+    const due = pending.filter(p => p.at <= target).sort((a, b) => a.at - b.at)[0];
+    if (!due) break;
+    pending = pending.filter(p => p !== due);
+    fakeNow = due.at;
+    due.fn();
+    if (!clearedIds.has(due.id))
+      pending.push({ fn: due.fn, at: due.at + due.every, id: due.id, every: due.every });
+  }
+  fakeNow = target;
+}
+
+/* buildBar：真实 FM1_STRUM 造 folk 小节（与页面将来同一套组合） */
+const BAR_SEC = 2.0;               // 120BPM 4/4
+function makeBuildBar(baseSeed) {
+  return function (barIndex) {
+    const steps = S.expandRhythm('folk', BAR_SEC);
+    let events = [];
+    for (const st of steps) {
+      const evs = S.strum(E6, { pattern: st.stroke, spread: 0.09, gate: 1.2 });
+      const hz = S.humanize(evs, { seed: S.barSeed(baseSeed, barIndex), timingMs: 6, velJitter: 10 });
+      events = events.concat(hz.map(e => ({ note: e.note, velocity: e.velocity,
+        tOn: e.tOn + st.at, tOff: e.tOff + st.at, string: e.string, stroke: e.stroke })));
+    }
+    return { events: events, barSec: BAR_SEC };
+  };
+}
+
+/* 校验路径 */
+throws(() => SEQ.createPlayer({}), 'now', '缺 now');
+throws(() => SEQ.createPlayer({ now: () => fakeNow }), 'timer', '缺 timer');
+throws(() => SEQ.createPlayer({ now: () => fakeNow, timer: manualTimer }), 'deliver', '缺 deliver');
+throws(() => SEQ.createPlayer({ now: () => fakeNow, timer: manualTimer, deliver: () => {} }), 'buildBar', '缺 buildBar');
+throws(() => SEQ.createPlayer({ now: () => fakeNow, timer: manualTimer, deliver: () => {},
+  buildBar: () => ({ events: [], barSec: 2 }), lookahead: 0 }), '正数', 'lookahead = 0');
+throws(() => { const p = SEQ.createPlayer({ now: () => fakeNow, timer: manualTimer, deliver: () => {},
+  buildBar: () => ({ barSec: 0 }) }); p.start(); }, 'barSec', 'buildBar 返回 barSec=0（start 时炸）');
+
+/* 基本 run：4 小节，barStart 等差 2.0 */
+function freshRun(baseSeed) {
+  const got = [];
+  const player = SEQ.createPlayer({
+    now: () => fakeNow,
+    timer: manualTimer,
+    deliver: (events, barStart, barIndex) => got.push({ events, barStart, barIndex }),
+    buildBar: makeBuildBar(baseSeed),
+  });
+  return { player, got };
+}
+const run = freshRun(7);
+check(run.player.start() === true, 'start() 返回 true');
+check(run.player.isRunning() === true, 'isRunning = true');
+check(run.player.start() === false, '重复 start = no-op（返回 false，不是错误）');
+check(run.got.length === 1, 'start 即排第 1 小节（lookahead 内）');
+check(run.got[0].barStart === 100 && run.got[0].barIndex === 0, 'bar0 起点 = 启动时刻 100');
+advance(2.0);
+check(run.got.length === 2 && run.got[1].barStart === 102, '2 秒后 bar1 已排在 102');
+advance(4.0);
+check(run.got.length === 4, '再 4 秒共 4 小节');
+check(eq(run.got.map(b => b.barStart), [100, 102, 104, 106]), 'barStart 严格等差 2.0（浮点精确）');
+check(eq(run.got.map(b => b.barIndex), [0, 1, 2, 3]), 'barIndex 从 0 递增');
+check(run.got.every(b => b.events.every(e => e.tOn >= 0 && e.tOn < BAR_SEC)),
+  '每小节事件 tOn 全部落在 [0, barSec)');
+/* 与 strum 的闭环：bar0 第一步是 0 拍 down 扫弦，首事件 = 最低音弦 */
+check(run.got[0].events[0].note === E6[0] &&
+      Math.abs(run.got[0].events[0].tOn) <= 0.006,
+  'bar0 首事件 = E 和弦最低音弦、tOn 只带人性化偏移（与 strum+humanize 闭环）');
+
+/* 确定性穿透：同一 run 内 bar0 与 bar1 种子不同必不同；跨 run 的 bar0 相同 */
+check(JSON.stringify(run.got[0].events) !== JSON.stringify(run.got[1].events),
+  'bar0 ≠ bar1（barSeed 派生不同）');
+run.player.stop();
+check(run.player.isRunning() === false, 'stop 后 isRunning = false');
+const before = run.got.length;
+advance(10);
+check(run.got.length === before, 'stop 后推进时钟不再派发');
+const run2 = freshRun(7);
+run2.player.start();
+check(JSON.stringify(run2.got[0].events) === JSON.stringify(run.got[0].events),
+  '跨 run 的 bar0 逐字节相同（任意次起停后第 N 小节确定性）');
+run2.player.stop();
+
+/* 积压跳过：挂起 10 秒后恢复，过去的小节不交付，从当前时刻续上 */
+const run3 = freshRun(7);
+fakeNow = 100;                     // 重置时钟（前面的 run 已推走）
+run3.player.start();
+fakeNow += 10;                     // 模拟标签页挂起：时钟跳过、定时器没跑
+const cnt3 = run3.got.length;
+pending.slice().sort((a, b) => a.at - b.at).forEach(p => { fakeNow = Math.max(fakeNow, p.at); p.fn(); });
+check(run3.got.length === cnt3 + 1, '挂起恢复：积压小节全部跳过，单次 tick 只补排 1 小节');
+check(run3.got[run3.got.length - 1].barStart === 110, '补排的是当前时刻的小节（110 = 100+10）');
+run3.player.stop();
 
 console.log('\n' + (fail === 0 ? `结论：全部通过（${pass} 项断言）。` : `结论：${fail} 项失败 / ${pass} 项通过。`));
 process.exit(fail === 0 ? 0 : 1);
