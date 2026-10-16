@@ -383,8 +383,8 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     refreshSampleButtons();
     log('✓ 采样「' + name + '」就绪：' + v.dur.toFixed(2) + 's @' + sampleRate +
         'Hz，根音 ' + noteName(root) +
-        (m.rootNote != null ? '（自动检测）' : '（未识别，请手动核对）') +
-        (v.loop ? '，已定位延音循环' : '，打击型不循环') +
+        (m.rootReliable ? '（自动检测）' : '（自动检测不可靠，请手动核对）') +
+        (v.loop ? '，已定位延音循环' : '，未启用循环') +
         '。扫弦/循环/人性化全部适用；本地试听与 MIDI out 生效，推送不适用。');
     return v;
   }
@@ -398,19 +398,26 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
         return;
       }
       ctx.decodeAudioData(fr.result, function (audioBuf) {
-        /* v0.5 全自动预处理：体检 → 掐头去尾 → 归一化 → 根音预填 */
+        /* v0.5 全自动预处理：体检 → 掐头去尾 → 归一化 → 根音预填
+           v0.5.1：根音只在「可靠」（置信 ≥0.7，单音素材）时才预填 ——
+           复杂录音的自相关抓到的是贝斯线不是根音，信它 = 全盘跑调 */
         var raw = audioBuf.getChannelData(0);
         var marks = FM1_SAMPLER.analyze(raw, audioBuf.sampleRate);
         var cut = FM1_SAMPLER.trim(raw, marks);
         var pcm = FM1_SAMPLER.normalize(cut.pcm);
         var m = cut.marks;
-        if (m.rootNote != null) $('sample-root').value = String(m.rootNote);
+        if (m.rootNote != null && m.rootReliable)
+          $('sample-root').value = String(m.rootNote);
         var root = Number($('sample-root').value);   /* 预填之后再读，可被手改覆盖 */
         var v = addSample(f.name, pcm, audioBuf.sampleRate, root, m);
         if (audioBuf.numberOfChannels > 1) log('（多声道采样取第 1 声道）');
         var trimmed = raw.length - pcm.length;
         if (trimmed > audioBuf.sampleRate * 0.01)
           log('（自动裁掉首尾静音 ' + (trimmed / audioBuf.sampleRate).toFixed(2) + 's）');
+        if (m.rootNote != null && !m.rootReliable)
+          log('⚠ 复杂录音：自动根音不可靠（置信 ' +
+              (m.rootConf * 100).toFixed(0) + '%），已保留手选根音 —— 请听准后手动核对',
+              'hot');
         if (FM1_SAMPLER.idb.available()) {
           /* 处理后的 PCM + marks 一起存（v:2），恢复零 DSP；pcm 内存归
              AudioBuffer 管的部分已在 normalize 拷贝成新数组，再存一份稳定副本 */
@@ -420,7 +427,7 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
             sampleRate: v.sampleRate, pcm: copy.buffer,
             marks: { trimIn: 0, trimOut: pcm.length,
                      loopStart: m.loopStart, loopEnd: m.loopEnd,
-                     rootNote: m.rootNote } })
+                     rootNote: m.rootNote, rootConf: m.rootConf } })
             .then(function () { log('✓ 采样已存入浏览器（IndexedDB），刷新后自动恢复'); },
                   function (err) { log('⚠ 采样保存失败（本次会话内仍可用）：' + err, 'hot'); });
         } else {
@@ -470,7 +477,7 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
             sampleRate: r.sampleRate, pcm: copy.buffer,
             marks: { trimIn: 0, trimOut: pcm.length,
                      loopStart: marks.loopStart, loopEnd: marks.loopEnd,
-                     rootNote: marks.rootNote } })
+                     rootNote: marks.rootNote, rootConf: marks.rootConf } })
             .then(function () { upgraded++; });
         }
         S.voices.push({ name: r.name, sample: true, root: r.root,

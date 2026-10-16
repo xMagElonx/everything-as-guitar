@@ -64,12 +64,14 @@ check(throws(() => SAM.idb.save({ name: 'x' }), 'rec.root'), 'save 缺 root 抛�
 check(throws(() => SAM.idb.save({ name: 'x', root: 40, pcm: {} }), 'ArrayBuffer'), 'save pcm 非 ArrayBuffer 抛错');
 check(throws(() => SAM.idb.remove(''), '非空'), 'remove 空名抛错');
 
-section('④ rateFor：±12 半音钳制（v0.5）');
-check(SAM.rateFor(76, 40) === 2, '+36 半音 → 封顶 2（±12 钳制）');
-check(SAM.rateFor(4, 40) === 0.5, '−36 半音 → 封底 0.5');
-check(SAM.rateFor(53, 40) === 2, '+13 半音 → 封顶（越界一格也拦）');
-check(SAM.rateFor(52, 40) === 2 && SAM.rateFor(28, 40) === 0.5,
-  '边界 ±12 含：行为与 v0.4 一致');
+section('④ rateFor：±24 半音钳制（v0.5.1：只拦极端速率，不折叠和弦）');
+check(SAM.rateFor(76, 40) === 4, '+36 半音 → 封顶 4（两个八度）');
+check(SAM.rateFor(4, 40) === 0.25, '−36 半音 → 封底 0.25');
+check(Math.abs(SAM.rateFor(57, 40) - Math.pow(2, 17 / 12)) < 1e-12,
+  '+17 半音不再被折叠（v0.5 的 ±12 会把和弦高音撞成同音）');
+check(SAM.rateFor(64, 40) === 4 && SAM.rateFor(16, 40) === 0.25,
+  '边界 ±24 含');
+check(Math.abs(SAM.rateFor(52, 40) - 2) < 1e-12, '±12 内行为不变');
 
 /* ---- 合成信号工具 ---- */
 const SR = 44100;
@@ -137,6 +139,21 @@ for (let i = 0; i < SR; i++) {
   noiseBuf[i] = 0.5 * (seed / 2147483648 - 1);
 }
 check(SAM.analyze(noiseBuf, SR).rootNote === null, '无调噪声 → null');
+/* 正弦+噪声混合：根音能检出（置信 0.5–0.7 区间）但不可靠 —— 复杂录音
+   的模型。v0.5.1 行为：根音照报，rootReliable=false，循环不启用。 */
+const mixedBuf = new Float32Array(SR);
+for (let i = 0; i < SR; i++) {
+  seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+  mixedBuf[i] = 0.5 * Math.sin(2 * Math.PI * 440 * i / SR) +
+                0.6 * (seed / 2147483648 - 1);
+}
+const mm = SAM.analyze(mixedBuf, SR);
+/* 噪声会拉偏插值峰位半个音级 —— 断言的契约是「检出但不可靠」，不是恰好 69 */
+check(mm.rootNote !== null && mm.rootReliable === false &&
+      mm.rootConf >= 0.5 && mm.rootConf < 0.7,
+  '正弦+噪声：根音检出但置信不足 → 标记不可靠', 'conf=' + mm.rootConf);
+check(mm.loopStart === null,
+  '置信不足 → 不启用循环（复杂录音防 glitch 复读）');
 
 section('⑦ analyze：稳态循环点检测');
 const susMarks = SAM.analyze(sineBuf(440, 1.0, 0.5), SR);
@@ -198,6 +215,14 @@ check(throws(() => SAM.renderNote('x', SR, 69, 69, 0.5, null), 'Float32Array'),
 const zero = SAM.renderNote(new Float32Array(SR), SR, 69, 69, 0.5, null);
 check(zero.length === Math.ceil((0.5 + 0.04) * SR) &&
       zero.every((x) => x === 0), '全静音输入 → 全零 buffer（照样调度不炸）');
+/* 热起始（复杂录音中段 / 录音开头就在响）：跳过起音淡入，保住音头 */
+const hot = new Float32Array(Math.round(0.6 * SR));
+for (let i = 0; i < hot.length; i++)
+  hot[i] = 0.9 * Math.sin(2 * Math.PI * 440 * i / SR + 1);   // hot[0] ≈ 0.76
+const rHot = SAM.renderNote(hot, SR, 69, 69, 0.3, null);
+check(Math.abs(rHot[0] - hot[0]) < 1e-9, '起始就有声 → 跳过起音淡入（保音头）',
+  rHot[0] + ' vs ' + hot[0]);
+check(Math.abs(rHot[rHot.length - 1]) < 1e-6, '尾部照样淡出（永不硬切）');
 
 console.log('\n结论：' + (fail === 0
   ? `全部通过（${pass} 项断言）。`

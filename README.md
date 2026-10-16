@@ -19,7 +19,7 @@ bench: search, edit, write FM/DX7 voices). Separate repos; the byte-level
 engine is forked verbatim — see [`ENGINE-FORK.md`](ENGINE-FORK.md).
 
 ⚠ **Hardware status — testers welcome.** Everything here runs, covered by
-**379 test assertions**, but **the device-facing paths have never touched a
+**383 test assertions**, but **the device-facing paths have never touched a
 real FM-1**. The biggest open question and the full unverified list are below.
 
 「Bytes sent」≠「device played it」。 If you have the machine: five minutes
@@ -70,18 +70,20 @@ which is A, not "G major".)
 3. **Bring your own samples (WAV/MP3)**: record one real guitar pluck (or
    any sound), drop it in — that's a whole sample guitar. Since v0.5 the
    preprocessing is **fully automatic**: silence trim → peak normalize →
-   **root-note auto-detection** (normalized autocorrelation, prefilled and
-   editable) → **sustain-loop detection** for sustained material
-   (zero-crossing aligned, crossfaded wrap). Chord tones play via varispeed
-   **clamped to ±12 semitones**, rendered through the same offline pipeline
-   as FM voices — **envelope baked in, never hard-cut** (3 ms attack / 40 ms
-   release fade). Strumming, rhythm loops, humanize and motor-strum all
-   apply. Samples persist in browser IndexedDB and survive a refresh
-   (private-browsing mode degrades gracefully to session-only, with a log
-   line). **Samples drive local audition and MIDI out only — they cannot be
-   pushed to a device** (an FM synth has no sample-transfer protocol).
-   DSP and persistence live in `engine/sampler.js` (`FM1_SAMPLER`, pure
-   functions, Node-testable).
+   **root-note auto-detection** (normalized autocorrelation) →
+   **sustain-loop detection** for sustained material (zero-crossing
+   aligned, crossfaded wrap). Chord tones play via varispeed **clamped to
+   ±24 semitones** (extreme-rate guard only), rendered through the same
+   offline pipeline as FM voices — **envelope baked in, never hard-cut**.
+   **Complex recordings (songs/harmonies) degrade gracefully**: when root
+   confidence is low the page skips prefill and skips looping (no glitch
+   repeats) and asks you to verify the root by ear. Strumming, rhythm
+   loops, humanize and motor-strum all apply. Samples persist in browser
+   IndexedDB and survive a refresh (private-browsing mode degrades
+   gracefully to session-only, with a log line). **Samples drive local
+   audition and MIDI out only — they cannot be pushed to a device** (an FM
+   synth has no sample-transfer protocol). DSP and persistence live in
+   `engine/sampler.js` (`FM1_SAMPLER`, pure functions, Node-testable).
 4. **Any external MIDI synthesizer**: what goes out is a standard staggered
    Note On/Off stream — the FM-1 is simply the device with today's longest
    test checklist; Dexed, a Volca FM, a real DX7, anything with a MIDI IN
@@ -143,11 +145,11 @@ node tools/starter_test.mjs   # ② every bundled voice renders audible + guitar
 node tools/param_test.mjs     # ③ 155-param table + pushVoice round-trip + SysEx anchor (26)
 node tools/midi_test.mjs      # ④ transport + device sim (36)
 node tools/strum_test.mjs     # ⑤ strum / humanize / rhythms / scheduler (141)
-node tools/sampler_test.mjs   # ⑥ sample DSP pipeline: clamp/trim/root/loop/render (62)
+node tools/sampler_test.mjs   # ⑥ sample DSP pipeline: clamp/trim/root/loop/render (67)
 node tools/smoke.mjs          # ⑦ page end-to-end, three scenarios (77, incl. samples)
 ```
 
-All seven exit 0, **379 assertions**. Fresh `git clone` → run → green. The
+All seven exit 0, **383 assertions**. Fresh `git clone` → run → green. The
 external-pack section **loudly SKIPs** when `data/external/` is empty
 (no bytes is the rights-chain norm, not a failure). LF discipline is
 enforced by `.gitattributes`; a CRLF checkout breaks the smoke test by
@@ -163,10 +165,14 @@ in [`docs/voice-sources.md`](docs/voice-sources.md)). Details in
 
 ## Roadmap
 
-- v0.5 (this repo): **sample voices matured** — fully automatic preprocessing
+- v0.5.1: **sample bugfixes** — complex recordings no longer trigger the
+  sustain loop (glitch repeats), root detection marked unreliable on
+  polyphonic material (no prefill), ±12 clamp that folded chord tones
+  relaxed to ±24, attack fade skipped on hot-start samples
+- v0.5: **sample voices matured** — fully automatic preprocessing
   (trim / normalize / root detection / sustain loop), playback moved to the
   unified offline-render pipeline (envelope baked in, cached), pitch shift
-  clamped to ±12 semitones
+  clamped
 - v0.4: **sample voices** — upload WAV/MP3 + root note, one sample
   becomes a whole sample guitar via varispeed; IndexedDB persistence; new
   `engine/sampler.js` (`FM1_SAMPLER`)

@@ -46,7 +46,12 @@
      LOOP_XFADE_SEC 循环 crossfade 时长（回绕接缝无缝化）
      LOOP_STABLE_SEC 稳态判定窗（逐窗 RMS）
      LOOP_STABLE_DB 相邻窗 RMS 变化小于它才视为「平稳」
-     RATE_CLAMP_SEMI 变调钳制半音数（超出封顶，不再 4× 变声） */
+     RATE_CLAMP_SEMI 变调钳制半音数（v0.5.1 放宽到 ±24：±12 会把超出
+               八度的和弦音折叠成同音，和弦直接散架；±24 只拦 1/16×/16×
+               的极端速率，正常和弦跨度不受影响）
+     ROOT_CONF_LOOP 循环启用的置信门槛：低于它（复杂录音抓不到「一个根音」
+               或置信一般）就不启用延音循环 —— v0.5 在歌曲片段上把任意
+               平稳段当循环点，每个音都变成 glitch 复读，就是这个门槛缺失 */
   var TRIM_DB = -50;
   var TRIM_LIN = Math.pow(10, TRIM_DB / 20);
   var ATTACK_SEC = 0.003;
@@ -56,12 +61,13 @@
   var ROOT_MIN_HZ = 60;
   var ROOT_MAX_HZ = 600;
   var ROOT_CONF = 0.5;
+  var ROOT_CONF_LOOP = 0.7;
   var ROOT_WIN = 4096;
   var LOOP_MIN_SEC = 0.10;
   var LOOP_XFADE_SEC = 0.01;
   var LOOP_STABLE_SEC = 0.05;
   var LOOP_STABLE_DB = 3;
-  var RATE_CLAMP_SEMI = 12;
+  var RATE_CLAMP_SEMI = 24;
 
   /* ---- 变调比率：每 12 个半音翻一倍频率（十二平均律）----
      v0.5 起钳制在 ±RATE_CLAMP_SEMI 半音（封顶语义，保序）：
@@ -152,8 +158,11 @@
       while (trimOut > trimIn && Math.abs(pcm[trimOut - 1]) <= TRIM_LIN) trimOut--;
     }
 
-    /* -- 根音：归一化自相关，取裁剪后中段窗口 -- */
-    var rootNote = null;
+    /* -- 根音：归一化自相关，取裁剪后中段窗口 --
+       rootConf = 归一化自相关峰值置信度（0–1）。它是后面循环门控的依据：
+       复杂录音（歌/和声）自相关抓不到「一个根音」，置信度低 → 不该既信根音
+       又启用循环。 */
+    var rootNote = null, rootConf = 0;
     var trimLen = trimOut - trimIn;
     var w = Math.min(ROOT_WIN, trimLen);
     var minLag = Math.max(2, Math.floor(sampleRate / ROOT_MAX_HZ));
@@ -186,6 +195,7 @@
       }
       if (pickLag === -1) pickLag = bestLag;
       bestLag = pickLag;
+      if (bestR >= ROOT_CONF) rootConf = bestR;    /* ≥ROOT_CONF 才算检出 */
       if (bestR >= ROOT_CONF && bestLag > minLag && bestLag < maxLag) {
         /* 抛物线插值细化峰位 */
         var r0 = rs[bestLag - 1], r1 = rs[bestLag], r2 = rs[bestLag + 1];
@@ -198,9 +208,12 @@
       }
     }
 
-    /* -- 循环点：从尾部向前找稳态带（逐窗 RMS 变化 < LOOP_STABLE_DB）-- */
+    /* -- 循环点：从尾部向前找稳态带（逐窗 RMS 变化 < LOOP_STABLE_DB）--
+       门控（v0.5.1）：只有根音置信 ≥ ROOT_CONF_LOOP 才找循环 ——
+       单音乐器音才有「延音循环」可言；歌曲片段的平稳段只是响度平稳，
+       回绕它 = 每个音变成 glitch 复读（v0.5 的实测事故）。 */
     var loopStart = null, loopEnd = null;
-    if (peak > TRIM_LIN) {
+    if (peak > TRIM_LIN && rootConf >= ROOT_CONF_LOOP) {
       var winN = Math.max(64, Math.round(LOOP_STABLE_SEC * sampleRate));
       var winRms = [];                       /* {from, to, db} */
       for (var ws = trimIn; ws + winN <= trimOut; ws += winN) {
@@ -252,7 +265,9 @@
     }
 
     return { peak: peak, trimIn: trimIn, trimOut: trimOut,
-             rootNote: rootNote, loopStart: loopStart, loopEnd: loopEnd };
+             rootNote: rootNote, rootConf: rootConf,
+             rootReliable: rootConf >= ROOT_CONF_LOOP,
+             loopStart: loopStart, loopEnd: loopEnd };
   }
 
   /* 从 from 起找第一个上升零交叉（x≤0 且下一样本>0）；
@@ -276,6 +291,8 @@
     var shift = marks.trimIn;
     var m = { trimIn: 0, trimOut: out.length,
               peak: marks.peak, rootNote: marks.rootNote || null,
+              rootConf: marks.rootConf || 0,
+              rootReliable: !!marks.rootReliable,
               loopStart: marks.loopStart != null ? marks.loopStart - shift : null,
               loopEnd: marks.loopEnd != null ? marks.loopEnd - shift : null };
     if (m.loopStart != null && (m.loopStart < 0 || m.loopEnd > out.length)) {
@@ -350,9 +367,12 @@
       out[i] = s;
       p += rate;
     }
-    /* 包络烘焙：淡长 min(常量, len/4)——超短输入也有淡入淡出 */
-    var atk = Math.min(Math.round(ATTACK_SEC * sampleRate),
-                       Math.floor(outLen / 4));
+    /* 包络烘焙：淡长 min(常量, len/4)——超短输入也有淡入淡出。
+       起音淡入只适用于「以静音起始」的样本（trim 裁出来的单音）；
+       样本本身起始就有声（复杂录音中段），淡入只会抹掉现成的音头 ——
+       v0.5 的「脆劲没了」。 */
+    var atk = Math.abs(pcm[0]) > 0.1 ? 0 :
+      Math.min(Math.round(ATTACK_SEC * sampleRate), Math.floor(outLen / 4));
     var rel = Math.min(Math.round(RELEASE_SEC * sampleRate),
                        Math.floor(outLen / 4));
     for (i = 0; i < atk; i++) out[i] *= i / atk;
