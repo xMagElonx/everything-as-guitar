@@ -19,7 +19,7 @@ bench: search, edit, write FM/DX7 voices). Separate repos; the byte-level
 engine is forked verbatim — see [`ENGINE-FORK.md`](ENGINE-FORK.md).
 
 ⚠ **Hardware status — testers welcome.** Everything here runs, covered by
-**339 test assertions**, but **the device-facing paths have never touched a
+**379 test assertions**, but **the device-facing paths have never touched a
 real FM-1**. The biggest open question and the full unverified list are below.
 
 「Bytes sent」≠「device played it」。 If you have the machine: five minutes
@@ -38,7 +38,7 @@ over **USB**, and negative results are the most useful ones —
 | `[` / `]` | BPM −5 / +5 |
 | `H` | Humanize toggle (±6 ms timing, ±10 velocity per string; seeded, reproducible) |
 | **Hold a pad** | Continuous strum (motor strum); release to stop |
-| **Load sample** | Upload WAV/MP3 + root note → varispeed sample guitar (persisted in IndexedDB; cannot be pushed to a device) |
+| **Load sample** | Upload WAV/MP3 → auto-processed sample guitar (root auto-detected, editable; persisted in IndexedDB; cannot be pushed to a device) |
 
 **MIDI keyboard input**: low zone C2–A2 (36–45) selects chord slots, high
 zone C4/D4/E4 = down/up/chug — with a MIDI keyboard this is the VST
@@ -68,14 +68,19 @@ which is A, not "G major".)
    [`docs/voice-sources.md`](docs/voice-sources.md); packs missing licence
    fields are **refused** with a log line, never silently loaded).
 3. **Bring your own samples (WAV/MP3)**: record one real guitar pluck (or
-   any sound), set its root note, and every chord tone plays through it via
-   varispeed pitch-shift (`playbackRate = 2^((note−root)/12)`) — the
-   classic MPC trick. Strumming, rhythm loops, humanize and motor-strum all
+   any sound), drop it in — that's a whole sample guitar. Since v0.5 the
+   preprocessing is **fully automatic**: silence trim → peak normalize →
+   **root-note auto-detection** (normalized autocorrelation, prefilled and
+   editable) → **sustain-loop detection** for sustained material
+   (zero-crossing aligned, crossfaded wrap). Chord tones play via varispeed
+   **clamped to ±12 semitones**, rendered through the same offline pipeline
+   as FM voices — **envelope baked in, never hard-cut** (3 ms attack / 40 ms
+   release fade). Strumming, rhythm loops, humanize and motor-strum all
    apply. Samples persist in browser IndexedDB and survive a refresh
    (private-browsing mode degrades gracefully to session-only, with a log
    line). **Samples drive local audition and MIDI out only — they cannot be
    pushed to a device** (an FM synth has no sample-transfer protocol).
-   Math and persistence live in `engine/sampler.js` (`FM1_SAMPLER`, pure
+   DSP and persistence live in `engine/sampler.js` (`FM1_SAMPLER`, pure
    functions, Node-testable).
 4. **Any external MIDI synthesizer**: what goes out is a standard staggered
    Note On/Off stream — the FM-1 is simply the device with today's longest
@@ -138,11 +143,11 @@ node tools/starter_test.mjs   # ② every bundled voice renders audible + guitar
 node tools/param_test.mjs     # ③ 155-param table + pushVoice round-trip + SysEx anchor (26)
 node tools/midi_test.mjs      # ④ transport + device sim (36)
 node tools/strum_test.mjs     # ⑤ strum / humanize / rhythms / scheduler (141)
-node tools/sampler_test.mjs   # ⑥ sample pitch math + playback plan (25)
-node tools/smoke.mjs          # ⑦ page end-to-end, three scenarios (74, incl. samples)
+node tools/sampler_test.mjs   # ⑥ sample DSP pipeline: clamp/trim/root/loop/render (62)
+node tools/smoke.mjs          # ⑦ page end-to-end, three scenarios (77, incl. samples)
 ```
 
-All seven exit 0, **339 assertions**. Fresh `git clone` → run → green. The
+All seven exit 0, **379 assertions**. Fresh `git clone` → run → green. The
 external-pack section **loudly SKIPs** when `data/external/` is empty
 (no bytes is the rights-chain norm, not a failure). LF discipline is
 enforced by `.gitattributes`; a CRLF checkout breaks the smoke test by
@@ -158,7 +163,11 @@ in [`docs/voice-sources.md`](docs/voice-sources.md)). Details in
 
 ## Roadmap
 
-- v0.4 (this repo): **sample voices** — upload WAV/MP3 + root note, one sample
+- v0.5 (this repo): **sample voices matured** — fully automatic preprocessing
+  (trim / normalize / root detection / sustain loop), playback moved to the
+  unified offline-render pipeline (envelope baked in, cached), pitch shift
+  clamped to ±12 semitones
+- v0.4: **sample voices** — upload WAV/MP3 + root note, one sample
   becomes a whole sample guitar via varispeed; IndexedDB persistence; new
   `engine/sampler.js` (`FM1_SAMPLER`)
 - v0.3.1: rhythm patterns rebuilt on the guitar arm-motion rule + repositioned

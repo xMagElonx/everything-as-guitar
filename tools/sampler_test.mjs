@@ -1,5 +1,6 @@
-// 采样音色引擎纯逻辑回归：变调比率、播放参数计划、IDB 降级判定。
-// rateFor/plan 是 scheduleNote 分叉的全部数学 —— 这里逐字段锁死，
+// 采样音色引擎纯逻辑回归：变调比率、播放参数计划、DSP 管线、IDB 降级判定。
+// rateFor 是变调的全部数学；v0.5 起播放走 analyze→trim→normalize→renderNote
+// 离线渲染管线（与 FM 路径同构），plan 保留作回归。这里逐字段锁死，
 // 页面侧只消费它们的输出（smoke 场景 C 负责端到端）。
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +63,141 @@ check(throws(() => SAM.idb.save({}), 'rec.name'), 'save 缺 name 抛错（不静
 check(throws(() => SAM.idb.save({ name: 'x' }), 'rec.root'), 'save 缺 root 抛错');
 check(throws(() => SAM.idb.save({ name: 'x', root: 40, pcm: {} }), 'ArrayBuffer'), 'save pcm 非 ArrayBuffer 抛错');
 check(throws(() => SAM.idb.remove(''), '非空'), 'remove 空名抛错');
+
+section('④ rateFor：±12 半音钳制（v0.5）');
+check(SAM.rateFor(76, 40) === 2, '+36 半音 → 封顶 2（±12 钳制）');
+check(SAM.rateFor(4, 40) === 0.5, '−36 半音 → 封底 0.5');
+check(SAM.rateFor(53, 40) === 2, '+13 半音 → 封顶（越界一格也拦）');
+check(SAM.rateFor(52, 40) === 2 && SAM.rateFor(28, 40) === 0.5,
+  '边界 ±12 含：行为与 v0.4 一致');
+
+/* ---- 合成信号工具 ---- */
+const SR = 44100;
+function sineBuf(hz, durSec, amp) {
+  const n = Math.round(durSec * SR), p = new Float32Array(n);
+  for (let i = 0; i < n; i++) p[i] = amp * Math.sin(2 * Math.PI * hz * i / SR);
+  return p;
+}
+function decayBuf(hz, tauSec, durSec, amp) {
+  const n = Math.round(durSec * SR), p = new Float32Array(n);
+  for (let i = 0; i < n; i++)
+    p[i] = amp * Math.exp(-i / (tauSec * SR)) * Math.sin(2 * Math.PI * hz * i / SR);
+  return p;
+}
+
+section('⑤ analyze/trim/normalize：静音裁剪与归一化');
+const padded = new Float32Array(SR);            // 0.2s 静音 + 0.4s 440Hz + 0.2s 静音
+for (let i = Math.round(0.2 * SR); i < Math.round(0.6 * SR); i++)
+  padded[i] = 0.5 * Math.sin(2 * Math.PI * 440 * i / SR);
+const marks = SAM.analyze(padded, SR);
+check(Math.abs(marks.trimIn - 0.2 * SR) < 32, 'trimIn ≈ 0.2s（阈值内容差 <32 样本）',
+  marks.trimIn);
+check(Math.abs(marks.trimOut - 0.6 * SR) < 32,
+  'trimOut ≈ 0.6s（内容终点）', marks.trimOut);
+check(marks.peak > 0.49 && marks.peak <= 0.5, 'peak = 0.5（正弦幅度）', marks.peak);
+const cut = SAM.trim(padded, marks);
+check(cut.pcm.length === marks.trimOut - marks.trimIn, '裁剪长度 = trimOut−trimIn');
+check(cut.marks.trimIn === 0 && cut.marks.trimOut === cut.pcm.length,
+  '裁后 marks 归零（新坐标系）');
+if (marks.loopStart != null) {
+  check(cut.marks.loopStart === marks.loopStart - marks.trimIn,
+    '循环点随裁剪平移');
+}
+const normed = SAM.normalize(cut.pcm, 0.95);
+let pk2 = 0;
+for (const x of normed) pk2 = Math.max(pk2, Math.abs(x));
+check(Math.abs(pk2 - 0.95) < 1e-6, '归一化后峰值 = 0.95', pk2);
+const quiet = sineBuf(440, 0.5, 1e-4);
+const qn = SAM.normalize(quiet, 0.95);
+let qpk = 0;
+for (const x of qn) qpk = Math.max(qpk, Math.abs(x));
+check(Math.abs(qpk - 1e-3) < 1e-9, '极小信号增益封顶 ×10（防抬噪声底）', qpk);
+const silentOut = SAM.normalize(new Float32Array(1000), 0.95);
+check(silentOut.length === 1000 &&
+      silentOut.every((x) => x === 0), '全静音输入原样返回不炸');
+check(throws(() => SAM.normalize(cut.pcm, 1.5), 'target'),
+  'normalize target > 1 抛错');
+check(throws(() => SAM.trim(cut.pcm, { trimIn: 5, trimOut: 2 }), '非法'),
+  'trim marks 倒挂抛错');
+
+section('⑥ analyze：自相关根音检测');
+check(SAM.analyze(sineBuf(440, 1.0, 0.5), SR).rootNote === 69,
+  '440Hz → A4 (69)');
+check(SAM.analyze(sineBuf(82.41, 1.5, 0.8), SR).rootNote === 40,
+  '82.41Hz → E2 (40)（低音区，lag 535）');
+check(SAM.analyze(sineBuf(261.63, 1.0, 0.4), SR).rootNote === 60,
+  '261.63Hz → C4 (60)');
+const silentMarks = SAM.analyze(new Float32Array(SR), SR);
+check(silentMarks.rootNote === null && silentMarks.loopStart === null,
+  '全静音 → rootNote/loop 双 null');
+const noiseBuf = new Float32Array(SR);          // LCG 白噪声（确定可复现）
+let seed = 42;
+for (let i = 0; i < SR; i++) {
+  seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+  noiseBuf[i] = 0.5 * (seed / 2147483648 - 1);
+}
+check(SAM.analyze(noiseBuf, SR).rootNote === null, '无调噪声 → null');
+
+section('⑦ analyze：稳态循环点检测');
+const susMarks = SAM.analyze(sineBuf(440, 1.0, 0.5), SR);
+check(susMarks.loopStart !== null && susMarks.loopEnd > susMarks.loopStart,
+  '持续音找到循环段');
+check(susMarks.loopEnd - susMarks.loopStart >= Math.ceil(0.1 * SR),
+  '循环段长 ≥ LOOP_MIN_SEC (0.1s)', susMarks.loopEnd - susMarks.loopStart);
+const susPcm = sineBuf(440, 1.0, 0.5);
+check(susPcm[susMarks.loopStart - 1] <= 0 && susPcm[susMarks.loopStart] > 0,
+  'loopStart 落在上升零交叉');
+check(susPcm[susMarks.loopEnd - 1] <= 0 && susPcm[susMarks.loopEnd] > 0,
+  'loopEnd 落在上升零交叉');
+check(SAM.analyze(decayBuf(440, 0.15, 1.0, 0.5), SR).loopStart === null,
+  '快衰减 τ=0.15s（打击型）→ 无循环');
+check(SAM.analyze(decayBuf(440, 2.0, 1.0, 0.5), SR).loopStart !== null,
+  '慢衰减 τ=2s（可延音）→ 有循环');
+
+section('⑧ renderNote：离线渲染（varispeed + loop + 包络）');
+const normSine = SAM.normalize(SAM.trim(padded, marks).pcm, 0.95);
+const loopObj = marks.loopStart != null
+  ? { start: SAM.trim(padded, marks).marks.loopStart,
+      end: SAM.trim(padded, marks).marks.loopEnd }
+  : null;
+const r1 = SAM.renderNote(normSine, SR, 69, 69, 0.5, loopObj);
+check(r1.length === Math.ceil((0.5 + 0.04) * SR),
+  '输出长度恒 = (gate+RELEASE_SEC)*sr', r1.length);
+check(Math.abs(r1[0]) < 1e-6 && Math.abs(r1[r1.length - 1]) < 1e-6,
+  '首尾样值 ≈ 0（淡入淡出烘焙，永不硬切）');
+const rLong = SAM.renderNote(normSine, SR, 69, 69, 2.0, loopObj);
+check(rLong.length === Math.ceil((2.0 + 0.04) * SR) &&
+      rLong.length > normSine.length,
+  'gate 超采样长 + loop → 长度仍达标（回绕生效）');
+let maxJump = 0;
+for (let i = 1; i < rLong.length; i++)
+  maxJump = Math.max(maxJump, Math.abs(rLong[i] - rLong[i - 1]));
+/* 判别力校准：归一化 440Hz 的自然斜率 = 0.95*2*sin(π*440/SR) ≈ 0.0596，
+   阈值给 1.05× —— 真接缝炸裂是 0.3 级别的跳变，混不过去。 */
+const slopeCap = 0.95 * 2 * Math.sin(Math.PI * 440 / SR) * 1.05;
+check(maxJump < slopeCap, '回绕接缝无缝（最大跳变 < 自然斜率×1.05）',
+  maxJump + ' vs ' + slopeCap.toFixed(4));
+const rHi = SAM.renderNote(normSine, SR, 81, 69, 0.3, loopObj);  // +12 半音
+check(rHi.length === Math.ceil((0.3 + 0.04) * SR),
+  '升八度（钳制边界）时长仍恒定——变调不变长');
+const rShort = SAM.renderNote(normSine, SR, 69, 69, 0.05, loopObj);
+check(rShort.length === Math.ceil((0.05 + 0.04) * SR),
+  'gate 短于采样 → 不触发 loop，长度照样恒定');
+const snapshot = Float32Array.from(normSine);
+SAM.renderNote(normSine, SR, 50, 69, 0.5, loopObj);
+let same = true;
+for (let i = 0; i < normSine.length; i++)
+  if (normSine[i] !== snapshot[i]) { same = false; break; }
+check(same, '纯函数：输入 pcm 未被修改');
+check(throws(() => SAM.renderNote(normSine, SR, 69, 69, -1, null), '非负数'),
+  'gateSec < 0 抛错');
+check(throws(() => SAM.renderNote(normSine, SR, 69, 69, 0.5,
+  { start: 5, end: 2 }), '非法'), 'loop 倒挂抛错');
+check(throws(() => SAM.renderNote('x', SR, 69, 69, 0.5, null), 'Float32Array'),
+  'pcm 非 Float32Array 抛错');
+const zero = SAM.renderNote(new Float32Array(SR), SR, 69, 69, 0.5, null);
+check(zero.length === Math.ceil((0.5 + 0.04) * SR) &&
+      zero.every((x) => x === 0), '全静音输入 → 全零 buffer（照样调度不炸）');
 
 console.log('\n结论：' + (fail === 0
   ? `全部通过（${pass} 项断言）。`

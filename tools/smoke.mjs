@@ -100,18 +100,25 @@ function FakeAudioContext() {
   this.starts = [];
   this.stops = [];
   this.rates = [];
+  this.lens = [];
   this.gainVals = [];
 }
 FakeAudioContext.instances = [];
-/* decodeAudioData：回调式（页面同款用法），返回 0.5s 假 buffer */
+/* decodeAudioData：回调式（页面同款用法），返回 0.5s 440Hz 正弦。
+   v0.5 起上传会跑全自动预处理（trim/根音检测/循环点）——静音桩什么都
+   检不出来，必须给非静音内容：440Hz 持续正弦 → 根音 A4(69) + 有循环。 */
 FakeAudioContext.prototype.decodeAudioData = function (ab, ok, fail) {
+  const n = 22050, pcm = new Float32Array(n);
+  for (let i = 0; i < n; i++)
+    pcm[i] = 0.5 * Math.sin(2 * Math.PI * 440 * i / 44100);
   ok({
-    duration: 0.5, sampleRate: 44100, numberOfChannels: 1, length: 22050,
-    getChannelData() { return new Float32Array(22050); },
+    duration: 0.5, sampleRate: 44100, numberOfChannels: 1, length: n,
+    getChannelData() { return pcm; },
   });
 };
 FakeAudioContext.prototype.createBuffer = function (ch, len, sr) {
   const self = this;
+  self.lens.push(len);               /* v0.5：buffer 长度是路径判别信号 */
   return {
     length: len, sampleRate: sr,
     getChannelData() { return new Float32Array(len); },
@@ -454,7 +461,7 @@ FakeFileReader.prototype.readAsArrayBuffer = function () {
 };
 globalThis.FileReader = FakeFileReader;
 
-section('C1 上传采样：解码 → 入列 → 下拉带标记（IDB 不可用 → 会话内降级）');
+section('C1 上传采样：预处理 → 自动根音 → 入列（IDB 不可用 → 会话内降级）');
 els['sample-root'].value = '40';                /* 真浏览器里默认选中的 E2 */
 els['sample-in'].files = [{ name: 'hit.wav' }];
 const optsBefore = (els['voice-sel'].innerHTML.match(/<option /g) || []).length;
@@ -462,38 +469,65 @@ els['sample-in'].onchange();
 for (let i = 0; i < 5; i++) await tick();       /* FileReader 异步 onload */
 check((els['voice-sel'].innerHTML.match(/<option /g) || []).length === optsBefore + 1,
   '上传后音色下拉多一项', (els['voice-sel'].innerHTML.match(/<option /g) || []).length + ' vs ' + (optsBefore + 1));
-check(/采样·根音 E2/.test(els['voice-sel'].innerHTML), '下拉标记「采样·根音 E2」（默认根音 40）');
+check(/采样·根音 A4/.test(els['voice-sel'].innerHTML),
+  '下拉标记「采样·根音 A4」（440Hz 自动检测 → 69）');
+check(els['sample-root'].value === '69', '根音下拉被预填为检测结果 69');
+check(/（自动检测）/.test(els.log.textContent), '根音来源入日志（自动检测）');
+check(/已定位延音循环/.test(els.log.textContent), '持续正弦 → 自动定位延音循环');
 check(/采样「hit\.wav」就绪/.test(els.log.textContent), '就绪日志（时长/采样率/根音）');
 check(/IndexedDB 不可用（隐私模式？）：采样仅本次会话有效/.test(els.log.textContent),
   'Node 无 IDB → 会话内降级有日志（不大声失败也不静默）');
 check(els['btn-sample-del'].style.display === '', '选中采样 → 删除按钮出现');
 
-section('C2 采样手势：变调源 + 显式 stop（逐项对齐 FM1_SAMPLER 复算）');
+section('C2 采样手势：统一渲染管线（零 stop、buffer 长度 = gate+40ms、力度照常）');
 const SAM = globalThis.FM1_SAMPLER;
+/* 给 renderNote 套计数器：缓存省的是 DSP 渲染，不是 createBuffer 分配
+   （scheduleNote 每音符都建新 AudioBuffer——那是廉价操作），所以缓存命中
+   的判别信号是渲染调用次数，不是 lens。 */
+const realSamplerRender = SAM.renderNote;
+let samplerRenderCalls = 0;
+SAM.renderNote = function () {
+  samplerRenderCalls++;
+  return realSamplerRender.apply(this, arguments);
+};
 const beforeC2s = FakeAC().starts.length, beforeC2g = FakeAC().gainVals.length,
-      beforeC2r = FakeAC().rates.length, beforeC2st = FakeAC().stops.length;
+      beforeC2l = FakeAC().lens.length, beforeC2st = FakeAC().stops.length;
 els['btn-down'].onclick();
-/* 当前选中和弦 = B7 结束时的 A（槽 7，5 音）：与页面同参独立复算 */
+/* 当前选中和弦 = B7 结束时的 A（槽 7，5 音）：与页面同参独立复算。
+   根音已被自动检测预填为 69（A4）。 */
 const evS = STRUM.humanize(
   STRUM.strum([45, 52, 57, 61, 64], { pattern: 'down', spread: 0.02, palmMute: false, stringBudget: true }),
   { seed: gestureSeed(), timingMs: 6, velJitter: 10 });
-const planS = SAM.plan(evS, 40, 0.5);
 check(FakeAC().starts.length - beforeC2s === evS.length, '采样手势源数 = 事件数（5）',
   (FakeAC().starts.length - beforeC2s) + ' vs ' + evS.length);
-let rateBad = -1;
-for (let i = beforeC2r; i < FakeAC().rates.length; i++)
-  if (Math.abs(FakeAC().rates[i] - planS[i - beforeC2r].rate) > 1e-12) { rateBad = i - beforeC2r; break; }
-check(rateBad < 0, '每个源的 playbackRate = 2^((note-40)/12)，与复算一致', '#' + rateBad);
+check(FakeAC().stops.length - beforeC2st === 0,
+  '零显式 stop（v0.5 统一管线：包络烘焙进 buffer，与 FM 同构）',
+  'stops+' + (FakeAC().stops.length - beforeC2st));
 let gainBad = -1;
 for (let i = beforeC2g; i < FakeAC().gainVals.length; i++)
-  if (Math.abs(FakeAC().gainVals[i] - planS[i - beforeC2g].gain) > 1e-12) { gainBad = i - beforeC2g; break; }
+  if (Math.abs(FakeAC().gainVals[i] - evS[i - beforeC2g].velocity / 127) > 1e-12) { gainBad = i - beforeC2g; break; }
 check(gainBad < 0, '力度照常进增益（velocity/127）', '#' + gainBad);
-check(FakeAC().stops.length - beforeC2st === evS.length, '每个源都排了显式 stop（采样不靠包络自终）');
-let stopBad = -1;
-for (let i = 0; i < evS.length; i++)
-  if (Math.abs(FakeAC().stops[beforeC2st + i] -
-      (FakeAC().starts[beforeC2s + i] + planS[i].duration)) > 1e-9) { stopBad = i; break; }
-check(stopBad < 0, 'stop 时刻 = start + min(gate, 采样时长/速率) + 60ms 释放', '#' + stopBad);
+let lenBad = -1;
+for (let i = 0; i < evS.length; i++) {
+  const want = Math.ceil((evS[i].tOff - evS[i].tOn + 0.04) * 44100);
+  if (FakeAC().lens[beforeC2l + i] !== want) { lenBad = i; break; }
+}
+check(lenBad < 0, '每个源 buffer 长度 = (gate+40ms)*sr（逐事件对齐，不随 rate 变）',
+  '#' + lenBad);
+/* 缓存验证：人性化会给 gate 加 ±6ms 抖动（每次手势键都不同，命中不了
+   是正确行为），关掉人性化连点两次 —— 事件逐字节相同 → 渲染零重复。
+   桩元素改 checked 不会触发页面逻辑，必须显式调 onchange() 同步
+   S.humanize.on。 */
+els['ck-hum'].checked = false; els['ck-hum'].onchange();
+els['btn-down'].onclick();
+gestureSeed();                                  /* 关人性化也消耗手势种子 */
+const callsMid = samplerRenderCalls;            /* 首次关人性化：+5 次渲染 */
+els['btn-down'].onclick();
+gestureSeed();
+check(samplerRenderCalls === callsMid,
+  '同参手势命中 S.cache（DSP 渲染零重复）',
+  '+' + (samplerRenderCalls - callsMid) + ' 次渲染');
+els['ck-hum'].checked = true; els['ck-hum'].onchange();   /* 还原 */
 
 section('C3 守卫：采样音色不能推送/闷音宏（没有参数字节）');
 const sentBeforeC = port.sent.length;
@@ -509,14 +543,22 @@ els['btn-sample-del'].onclick();
 check((els['voice-sel'].innerHTML.match(/<option /g) || []).length === optsBefore,
   '删除后音色下拉回到原项数');
 check(els['btn-sample-del'].style.display === 'none', '删除按钮隐藏（当前不是采样）');
-const beforeC4s = FakeAC().starts.length, beforeC4st = FakeAC().stops.length;
+const beforeC4s = FakeAC().starts.length, beforeC4l = FakeAC().lens.length;
 els['btn-down'].onclick();                      /* S.sel 落回普通音色 → FM 路径 */
-gestureSeed();                                  /* 种子对齐（复算不用，仅推进） */
-/* FM 路径的判别信号是 stop：FM 把 gate 包络烘焙进 buffer 永不 stop，
-   采样必须显式 stop（rates 两条路径都被假源记录，不构成判别） */
-check(FakeAC().starts.length - beforeC4s === 5 && FakeAC().stops.length === beforeC4st,
-  'FM 路径恢复：5 个声源、零 stop（采样分支零残留）',
-  'starts+' + (FakeAC().starts.length - beforeC4s) + ' stops+' + (FakeAC().stops.length - beforeC4st));
+/* 两条路径现在都不 stop（包络烘焙），判别信号换成 buffer 长度模式：
+   FM = round((gate+0.35)*sr)，采样 = ceil((gate+0.04)*sr) */
+const seed4 = gestureSeed();                    /* 点击后取 = 页面刚用掉的种子 */
+const ev4 = STRUM.humanize(
+  STRUM.strum([45, 52, 57, 61, 64], { pattern: 'down', spread: 0.02, palmMute: false, stringBudget: true }),
+  { seed: seed4, timingMs: 6, velJitter: 10 });
+let fmLenBad = -1;
+for (let i = 0; i < ev4.length; i++) {
+  const want = Math.round((ev4[i].tOff - ev4[i].tOn + 0.35) * 44100);
+  if (FakeAC().lens[beforeC4l + i] !== want) { fmLenBad = i; break; }
+}
+check(FakeAC().starts.length - beforeC4s === 5 && fmLenBad < 0,
+  'FM 路径恢复：5 个声源、buffer 长度 = (gate+350ms)*sr（FM 特征，零采样残留）',
+  'starts+' + (FakeAC().starts.length - beforeC4s) + ' lenBad#' + fmLenBad);
 
 globalThis.FileReader = undefined;              /* 摘掉假 FileReader */
 

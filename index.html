@@ -351,9 +351,10 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
   }
 
   /* ================================================================ 采样音色（WAV/MP3 → 变调扫弦）
-     单采样变调：一个采样 + 一个根音，每个和弦音按 playbackRate = 2^((note-root)/12)
-     播放 —— MPC / Mellotron 一脉的经典玩法。数学与持久化在 engine/sampler.js
-     （FM1_SAMPLER，纯函数可测），这里只做文件解码与接线。 */
+     单采样变调 + 全自动预处理（v0.5）：上传瞬间 analyze→trim→normalize，
+     根音自动检测（预填可手改），可延音素材自动找循环点。播放走
+     renderNote 离线渲染（varispeed + sustain loop + 包络烘焙），与 FM
+     路径同构 —— 数学与持久化在 engine/sampler.js（FM1_SAMPLER）。 */
   function fillSampleRoots() {
     var html = '';
     for (var n = 24; n <= 84; n++)
@@ -362,13 +363,17 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     $('sample-root').innerHTML = html;
   }
 
-  /* 采样条目进 S.voices 尾部（只追加 → 既有索引不漂移）。多声道取 ch0。 */
-  function addSample(name, audioBuf, root) {
+  /* 采样条目进 S.voices 尾部（只追加 → 既有索引不漂移）。
+     pcm 已是裁剪+归一化后的 Float32Array；marks 带循环点（裁剪后坐标）。 */
+  function addSample(name, pcm, sampleRate, root, marks) {
+    var m = marks || {};
     var v = {
       name: name, sample: true, root: root,
-      sampleRate: audioBuf.sampleRate,
-      pcm: audioBuf.getChannelData(0),
-      dur: audioBuf.duration
+      sampleRate: sampleRate,
+      pcm: pcm,
+      dur: pcm.length / sampleRate,
+      loop: (m.loopStart != null && m.loopEnd != null)
+        ? { start: m.loopStart, end: m.loopEnd } : null
     };
     S.voices.push(v);
     S.sel = S.voices.length - 1;
@@ -376,15 +381,15 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     rebuildVoiceSel();
     renderVoiceNote();
     refreshSampleButtons();
-    log('✓ 采样「' + name + '」就绪：' + audioBuf.duration.toFixed(2) + 's @' +
-        audioBuf.sampleRate + 'Hz，根音 ' + noteName(root) +
+    log('✓ 采样「' + name + '」就绪：' + v.dur.toFixed(2) + 's @' + sampleRate +
+        'Hz，根音 ' + noteName(root) +
+        (m.rootNote != null ? '（自动检测）' : '（未识别，请手动核对）') +
+        (v.loop ? '，已定位延音循环' : '，打击型不循环') +
         '。扫弦/循环/人性化全部适用；本地试听与 MIDI out 生效，推送不适用。');
-    if (audioBuf.numberOfChannels > 1) log('（多声道采样取第 1 声道）');
     return v;
   }
 
   function loadSampleFile(f) {
-    var root = Number($('sample-root').value);
     var fr = new FileReader();
     fr.onload = function () {
       var ctx = getCtx();
@@ -393,13 +398,29 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
         return;
       }
       ctx.decodeAudioData(fr.result, function (audioBuf) {
-        var v = addSample(f.name, audioBuf, root);
+        /* v0.5 全自动预处理：体检 → 掐头去尾 → 归一化 → 根音预填 */
+        var raw = audioBuf.getChannelData(0);
+        var marks = FM1_SAMPLER.analyze(raw, audioBuf.sampleRate);
+        var cut = FM1_SAMPLER.trim(raw, marks);
+        var pcm = FM1_SAMPLER.normalize(cut.pcm);
+        var m = cut.marks;
+        if (m.rootNote != null) $('sample-root').value = String(m.rootNote);
+        var root = Number($('sample-root').value);   /* 预填之后再读，可被手改覆盖 */
+        var v = addSample(f.name, pcm, audioBuf.sampleRate, root, m);
+        if (audioBuf.numberOfChannels > 1) log('（多声道采样取第 1 声道）');
+        var trimmed = raw.length - pcm.length;
+        if (trimmed > audioBuf.sampleRate * 0.01)
+          log('（自动裁掉首尾静音 ' + (trimmed / audioBuf.sampleRate).toFixed(2) + 's）');
         if (FM1_SAMPLER.idb.available()) {
-          /* pcm 视图的内存归 AudioBuffer 管，持久化前必须拷贝成自己的 ArrayBuffer */
-          var copy = new Float32Array(v.pcm.length);
-          copy.set(v.pcm);
-          FM1_SAMPLER.idb.save({ name: v.name, root: v.root,
-            sampleRate: v.sampleRate, pcm: copy.buffer })
+          /* 处理后的 PCM + marks 一起存（v:2），恢复零 DSP；pcm 内存归
+             AudioBuffer 管的部分已在 normalize 拷贝成新数组，再存一份稳定副本 */
+          var copy = new Float32Array(pcm.length);
+          copy.set(pcm);
+          FM1_SAMPLER.idb.save({ v: 2, name: v.name, root: v.root,
+            sampleRate: v.sampleRate, pcm: copy.buffer,
+            marks: { trimIn: 0, trimOut: pcm.length,
+                     loopStart: m.loopStart, loopEnd: m.loopEnd,
+                     rootNote: m.rootNote } })
             .then(function () { log('✓ 采样已存入浏览器（IndexedDB），刷新后自动恢复'); },
                   function (err) { log('⚠ 采样保存失败（本次会话内仍可用）：' + err, 'hot'); });
         } else {
@@ -420,26 +441,50 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
   }
 
   /* 刷新后恢复：只追加到 S.voices 尾部 → 既有索引不漂移，无锁安全。
-     不 await、不阻塞自检；失败降级为「重新上传」，不拦路。 */
+     v:2 记录（处理后 PCM + marks）直接入列零 DSP；v0.4 旧记录现场补跑
+     预处理管线并回写升级。不 await、不阻塞自检；失败降级为「重新上传」。 */
   function restoreSamples() {
     if (!FM1_SAMPLER.idb.available()) return;
     FM1_SAMPLER.idb.list().then(function (recs) {
       if (!recs || !recs.length) return;
-      var n = 0;
+      var n = 0, upgraded = 0;
       for (var i = 0; i < recs.length; i++) {
         var r = recs[i];
         if (!r || typeof r.name !== 'string' ||
-            !(r.pcm instanceof ArrayBuffer) || typeof r.root !== 'number') continue;
+            !(r.pcm instanceof ArrayBuffer) || typeof r.root !== 'number' ||
+            typeof r.sampleRate !== 'number') continue;
+        var pcm, marks;
+        if (r.v === 2 && r.marks) {
+          pcm = new Float32Array(r.pcm);
+          marks = r.marks;
+        } else {
+          /* v0.4 旧记录：裸 PCM，现场跑管线再回写 */
+          var raw = new Float32Array(r.pcm);
+          var m0 = FM1_SAMPLER.analyze(raw, r.sampleRate);
+          var cut = FM1_SAMPLER.trim(raw, m0);
+          pcm = FM1_SAMPLER.normalize(cut.pcm);
+          marks = cut.marks;
+          var copy = new Float32Array(pcm.length);
+          copy.set(pcm);
+          FM1_SAMPLER.idb.save({ v: 2, name: r.name, root: r.root,
+            sampleRate: r.sampleRate, pcm: copy.buffer,
+            marks: { trimIn: 0, trimOut: pcm.length,
+                     loopStart: marks.loopStart, loopEnd: marks.loopEnd,
+                     rootNote: marks.rootNote } })
+            .then(function () { upgraded++; });
+        }
         S.voices.push({ name: r.name, sample: true, root: r.root,
-          sampleRate: r.sampleRate, pcm: new Float32Array(r.pcm),
-          dur: r.pcm.byteLength / 4 / r.sampleRate });
+          sampleRate: r.sampleRate, pcm: pcm, dur: pcm.length / r.sampleRate,
+          loop: (marks.loopStart != null && marks.loopEnd != null)
+            ? { start: marks.loopStart, end: marks.loopEnd } : null });
         n++;
       }
       if (!n) return;
       rebuildVoiceSel();
       renderVoiceNote();
       refreshSampleButtons();
-      log('✓ 从浏览器恢复采样音色 ' + n + ' 个（IndexedDB）');
+      log('✓ 从浏览器恢复采样音色 ' + n + ' 个（IndexedDB）' +
+          (upgraded ? '，其中 ' + upgraded + ' 个已升级到 v0.5 预处理' : ''));
     }, function () {
       log('⚠ 采样恢复失败：本次会话内重新上传仍可用', 'hot');
     });
@@ -466,31 +511,32 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     return buf;
   }
 
+  /* 采样版：与 FM 路径同构 —— 包络烘焙、输出时长恒 (gate+0.04)s、
+     走同一个 S.cache。输出采样率 = 采样自身（WebAudio 自动重放到 ctx）。 */
+  function renderSampleNote(vi, note, gateSec) {
+    var key = 's' + vi + '|' + note + '|' + Math.round(gateSec * 1000);
+    if (S.cache[key]) return S.cache[key];
+    var v = S.voices[vi];
+    var buf = FM1_SAMPLER.renderNote(v.pcm, v.sampleRate, note, v.root,
+                                     gateSec, v.loop);
+    S.cache[key] = buf;
+    return buf;
+  }
+
   function scheduleNote(ctx, e, when) {
     var v = S.voices[S.sel];
     var src = ctx.createBufferSource();
     var g = ctx.createGain();
     g.gain.value = e.velocity / 127;   /* 力度近似：两条路径同款 */
-    if (v && v.sample) {
-      /* 采样路径：变调播放（playbackRate = 2^((note-root)/12)）。
-         FM 把 gate 包络烘焙进 buffer、播完自然结束；采样必须显式 stop，
-         不然降调拉长的尾音会一直响到底。时长由 FM1_SAMPLER.plan 算。 */
-      var buf = ctx.createBuffer(1, v.pcm.length, v.sampleRate);
-      buf.copyToChannel ? buf.copyToChannel(v.pcm, 0)
-                        : buf.getChannelData(0).set(v.pcm);
-      src.buffer = buf;
-      src.playbackRate.value = FM1_SAMPLER.rateFor(e.note, v.root);
-      src.connect(g); g.connect(ctx.destination);
-      src.start(when);
-      src.stop(when + FM1_SAMPLER.plan([e], v.root, v.dur)[0].duration);
-    } else {
-      var buf2 = renderNote(S.sel, e.note, e.tOff - e.tOn);
-      src.buffer = ctx.createBuffer(1, buf2.length, ctx.sampleRate);
-      src.buffer.copyToChannel ? src.buffer.copyToChannel(buf2, 0)
-                               : src.buffer.getChannelData(0).set(buf2);
-      src.connect(g); g.connect(ctx.destination);
-      src.start(when);
-    }
+    var buf = (v && v.sample)
+      ? renderSampleNote(S.sel, e.note, e.tOff - e.tOn)
+      : renderNote(S.sel, e.note, e.tOff - e.tOn);
+    src.buffer = ctx.createBuffer(1, buf.length,
+      (v && v.sample) ? v.sampleRate : ctx.sampleRate);
+    src.buffer.copyToChannel ? src.buffer.copyToChannel(buf, 0)
+                             : src.buffer.getChannelData(0).set(buf);
+    src.connect(g); g.connect(ctx.destination);
+    src.start(when);                   /* 两条路径都不 stop：包络在 buffer 里 */
   }
 
   /* 手势路径：相对时序（现在 + 60ms 余量起） */
