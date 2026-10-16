@@ -29,7 +29,7 @@ const tick = () => new Promise(r => setTimeout(r, 0));
 
 /* ---------------------------------------------------------------- 引擎挂 globalThis */
 for (const f of ['engine/dx7.js', 'engine/fm.js', 'engine/midi.js', 'engine/params.js',
-  'engine/strum.js', 'engine/seq.js']) {
+  'engine/strum.js', 'engine/seq.js', 'engine/sampler.js']) {
   new Function(readFileSync(path.join(ROOT, f), 'utf8'))();
 }
 const sandbox = {};
@@ -59,6 +59,7 @@ function makeEl(id) {
 }
 const els = {};
 for (const id of ['voice-sel', 'btn-audition', 'btn-load', 'file-in', 'voice-note',
+  'btn-sample', 'sample-in', 'sample-root', 'btn-sample-del',
   'pads', 'ck-pm', 'rng-spread', 'spread-val', 'ck-budget',
   'btn-down', 'btn-up', 'btn-chuck', 'ck-hum', 'rng-humt', 'humt-val', 'rng-humv', 'humv-val',
   'sel-rhythm', 'rng-bpm', 'bpm-val', 'in-seed', 'btn-dice', 'btn-loop',
@@ -97,9 +98,18 @@ function FakeAudioContext() {
   this.sampleRate = 44100;
   this.destination = { name: 'dest' };
   this.starts = [];
+  this.stops = [];
+  this.rates = [];
   this.gainVals = [];
 }
 FakeAudioContext.instances = [];
+/* decodeAudioData：回调式（页面同款用法），返回 0.5s 假 buffer */
+FakeAudioContext.prototype.decodeAudioData = function (ab, ok, fail) {
+  ok({
+    duration: 0.5, sampleRate: 44100, numberOfChannels: 1, length: 22050,
+    getChannelData() { return new Float32Array(22050); },
+  });
+};
 FakeAudioContext.prototype.createBuffer = function (ch, len, sr) {
   const self = this;
   return {
@@ -112,7 +122,9 @@ FakeAudioContext.prototype.createBufferSource = function () {
   const self = this;
   return {
     buffer: null, connect() {},
-    start(when) { self.starts.push(when); },
+    playbackRate: { value: 1 },
+    start(when) { self.starts.push(when); self.rates.push(this.playbackRate.value); },
+    stop(when) { self.stops.push(when); },
   };
 };
 FakeAudioContext.prototype.createGain = function () {
@@ -150,7 +162,7 @@ if (!m) { console.log('  FAIL  从 index.html 提取不到内联脚本'); proces
 const window = {
   DX7: globalThis.DX7, FM_ENGINE: globalThis.FM_ENGINE, FM1MIDI: globalThis.FM1MIDI,
   DX7_PARAMS: globalThis.DX7_PARAMS, FM1_STRUM: globalThis.FM1_STRUM,
-  FM1_SEQ: globalThis.FM1_SEQ,
+  FM1_SEQ: globalThis.FM1_SEQ, FM1_SAMPLER: globalThis.FM1_SAMPLER,
   FM1_STARTER: sandbox.FM1_STARTER,
   FM1_GUITAR: boxG.FM1_GUITAR,
   AudioContext: FakeAudioContext,
@@ -430,12 +442,90 @@ check(DX7.hex(macroSent.map(s => s.bytes)) === DX7.hex(expectMacro.map(mm => Arr
   '宏字节与独立复算逐字节一致（含真机锚点编址）');
 check(/已发出 ≠ 已执行/.test(els.log.textContent), '宏日志带诚实标注');
 
-/* ---------------------------------------------------------------- 收尾 */
+/* ================================================================ 场景 C */
+console.log('\n═══ 场景 C：采样音色 —— 上传/变调/守卫/删除（IDB 在 Node 降级）═══');
+
+/* 假 FileReader：页面 new FileReader() 走的是 globalThis（Node 全局）——
+   挂上再摘掉，别污染其他场景 */
+function FakeFileReader() {}
+FakeFileReader.prototype.readAsArrayBuffer = function () {
+  const self = this;
+  setImmediate(() => { if (self.onload) self.onload(); });
+};
+globalThis.FileReader = FakeFileReader;
+
+section('C1 上传采样：解码 → 入列 → 下拉带标记（IDB 不可用 → 会话内降级）');
+els['sample-root'].value = '40';                /* 真浏览器里默认选中的 E2 */
+els['sample-in'].files = [{ name: 'hit.wav' }];
+const optsBefore = (els['voice-sel'].innerHTML.match(/<option /g) || []).length;
+els['sample-in'].onchange();
+for (let i = 0; i < 5; i++) await tick();       /* FileReader 异步 onload */
+check((els['voice-sel'].innerHTML.match(/<option /g) || []).length === optsBefore + 1,
+  '上传后音色下拉多一项', (els['voice-sel'].innerHTML.match(/<option /g) || []).length + ' vs ' + (optsBefore + 1));
+check(/采样·根音 E2/.test(els['voice-sel'].innerHTML), '下拉标记「采样·根音 E2」（默认根音 40）');
+check(/采样「hit\.wav」就绪/.test(els.log.textContent), '就绪日志（时长/采样率/根音）');
+check(/IndexedDB 不可用（隐私模式？）：采样仅本次会话有效/.test(els.log.textContent),
+  'Node 无 IDB → 会话内降级有日志（不大声失败也不静默）');
+check(els['btn-sample-del'].style.display === '', '选中采样 → 删除按钮出现');
+
+section('C2 采样手势：变调源 + 显式 stop（逐项对齐 FM1_SAMPLER 复算）');
+const SAM = globalThis.FM1_SAMPLER;
+const beforeC2s = FakeAC().starts.length, beforeC2g = FakeAC().gainVals.length,
+      beforeC2r = FakeAC().rates.length, beforeC2st = FakeAC().stops.length;
+els['btn-down'].onclick();
+/* 当前选中和弦 = B7 结束时的 A（槽 7，5 音）：与页面同参独立复算 */
+const evS = STRUM.humanize(
+  STRUM.strum([45, 52, 57, 61, 64], { pattern: 'down', spread: 0.02, palmMute: false, stringBudget: true }),
+  { seed: gestureSeed(), timingMs: 6, velJitter: 10 });
+const planS = SAM.plan(evS, 40, 0.5);
+check(FakeAC().starts.length - beforeC2s === evS.length, '采样手势源数 = 事件数（5）',
+  (FakeAC().starts.length - beforeC2s) + ' vs ' + evS.length);
+let rateBad = -1;
+for (let i = beforeC2r; i < FakeAC().rates.length; i++)
+  if (Math.abs(FakeAC().rates[i] - planS[i - beforeC2r].rate) > 1e-12) { rateBad = i - beforeC2r; break; }
+check(rateBad < 0, '每个源的 playbackRate = 2^((note-40)/12)，与复算一致', '#' + rateBad);
+let gainBad = -1;
+for (let i = beforeC2g; i < FakeAC().gainVals.length; i++)
+  if (Math.abs(FakeAC().gainVals[i] - planS[i - beforeC2g].gain) > 1e-12) { gainBad = i - beforeC2g; break; }
+check(gainBad < 0, '力度照常进增益（velocity/127）', '#' + gainBad);
+check(FakeAC().stops.length - beforeC2st === evS.length, '每个源都排了显式 stop（采样不靠包络自终）');
+let stopBad = -1;
+for (let i = 0; i < evS.length; i++)
+  if (Math.abs(FakeAC().stops[beforeC2st + i] -
+      (FakeAC().starts[beforeC2s + i] + planS[i].duration)) > 1e-9) { stopBad = i; break; }
+check(stopBad < 0, 'stop 时刻 = start + min(gate, 采样时长/速率) + 60ms 释放', '#' + stopBad);
+
+section('C3 守卫：采样音色不能推送/闷音宏（没有参数字节）');
+const sentBeforeC = port.sent.length;
+els['btn-push'].onclick();
+check(/采样音色没有参数字节，无法推送/.test(els.log.textContent), 'pushVoice 被守卫拦下');
+check(port.sent.length === sentBeforeC, '被拦时一条消息都没发');
+els['btn-pmmacro'].onclick();
+check(/闷音宏（改设备端包络）不适用/.test(els.log.textContent), '闷音宏同样被拦（带替代建议）');
+check(port.sent.length === sentBeforeC, '仍然一条没发');
+
+section('C4 删除采样：列表回落、FM 路径恢复');
+els['btn-sample-del'].onclick();
+check((els['voice-sel'].innerHTML.match(/<option /g) || []).length === optsBefore,
+  '删除后音色下拉回到原项数');
+check(els['btn-sample-del'].style.display === 'none', '删除按钮隐藏（当前不是采样）');
+const beforeC4s = FakeAC().starts.length, beforeC4st = FakeAC().stops.length;
+els['btn-down'].onclick();                      /* S.sel 落回普通音色 → FM 路径 */
+gestureSeed();                                  /* 种子对齐（复算不用，仅推进） */
+/* FM 路径的判别信号是 stop：FM 把 gate 包络烘焙进 buffer 永不 stop，
+   采样必须显式 stop（rates 两条路径都被假源记录，不构成判别） */
+check(FakeAC().starts.length - beforeC4s === 5 && FakeAC().stops.length === beforeC4st,
+  'FM 路径恢复：5 个声源、零 stop（采样分支零残留）',
+  'starts+' + (FakeAC().starts.length - beforeC4s) + ' stops+' + (FakeAC().stops.length - beforeC4st));
+
+globalThis.FileReader = undefined;              /* 摘掉假 FileReader */
+
+
 globalThis.fetch = realFetch;
 navRestorer();
 check(fetchCalls === 0, '全程零网络请求（fetch 守门计数 0）');
 
 console.log(`\n${'─'.repeat(56)}`);
-console.log(fail === 0 ? `结论：两个场景端到端执行全部通过（${pass} 项断言）。`
+console.log(fail === 0 ? `结论：三个场景端到端执行全部通过（${pass} 项断言）。`
                        : `结论：${fail} 项失败 / ${pass} 项通过。`);
 process.exit(fail === 0 ? 0 : 1);

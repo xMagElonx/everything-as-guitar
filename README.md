@@ -7,9 +7,11 @@ chug), space toggles a rhythm loop, holding a pad gives a continuous
 strum — and every voice gets strummed, not just guitar patches. The strum
 engine emits nothing but standard MIDI notes, so the sound source is your
 choice: the **built-in FM engine** (audition without hardware), **your own
-imported `.syx` voices**, or **any MIDI synthesizer** — FM-1, Dexed, Volca
-FM, a real DX7. **The M-VAVE FM-1 is simply the first, best-tested target**
-(every hardware section below is about it), not the only one.
+imported `.syx` voices**, **your own WAV/MP3 samples** (one sample + a
+root note = a whole sample guitar via varispeed pitch-shift), or **any
+MIDI synthesizer** — FM-1, Dexed, Volca FM, a real DX7. **The M-VAVE FM-1
+is simply the first, best-tested target** (every hardware section below is
+about it), not the only one.
 
 This is the *performance* counterpart to
 [fm1-tone-engine](https://github.com/xMagElonx/fm1-tone-engine) (the *voice*
@@ -17,7 +19,7 @@ bench: search, edit, write FM/DX7 voices). Separate repos; the byte-level
 engine is forked verbatim — see [`ENGINE-FORK.md`](ENGINE-FORK.md).
 
 ⚠ **Hardware status — testers welcome.** Everything here runs, covered by
-**297 test assertions**, but **the device-facing paths have never touched a
+**339 test assertions**, but **the device-facing paths have never touched a
 real FM-1**. The biggest open question and the full unverified list are below.
 
 「Bytes sent」≠「device played it」。 If you have the machine: five minutes
@@ -36,6 +38,7 @@ over **USB**, and negative results are the most useful ones —
 | `[` / `]` | BPM −5 / +5 |
 | `H` | Humanize toggle (±6 ms timing, ±10 velocity per string; seeded, reproducible) |
 | **Hold a pad** | Continuous strum (motor strum); release to stop |
+| **Load sample** | Upload WAV/MP3 + root note → varispeed sample guitar (persisted in IndexedDB; cannot be pushed to a device) |
 
 **MIDI keyboard input**: low zone C2–A2 (36–45) selects chord slots, high
 zone C4/D4/E4 = down/up/chug — with a MIDI keyboard this is the VST
@@ -64,7 +67,17 @@ which is A, not "G major".)
    `data/external/` (inclusion criteria in
    [`docs/voice-sources.md`](docs/voice-sources.md); packs missing licence
    fields are **refused** with a log line, never silently loaded).
-3. **Any external MIDI synthesizer**: what goes out is a standard staggered
+3. **Bring your own samples (WAV/MP3)**: record one real guitar pluck (or
+   any sound), set its root note, and every chord tone plays through it via
+   varispeed pitch-shift (`playbackRate = 2^((note−root)/12)`) — the
+   classic MPC trick. Strumming, rhythm loops, humanize and motor-strum all
+   apply. Samples persist in browser IndexedDB and survive a refresh
+   (private-browsing mode degrades gracefully to session-only, with a log
+   line). **Samples drive local audition and MIDI out only — they cannot be
+   pushed to a device** (an FM synth has no sample-transfer protocol).
+   Math and persistence live in `engine/sampler.js` (`FM1_SAMPLER`, pure
+   functions, Node-testable).
+4. **Any external MIDI synthesizer**: what goes out is a standard staggered
    Note On/Off stream — the FM-1 is simply the device with today's longest
    test checklist; Dexed, a Volca FM, a real DX7, anything with a MIDI IN
    becomes the voice.
@@ -125,10 +138,11 @@ node tools/starter_test.mjs   # ② every bundled voice renders audible + guitar
 node tools/param_test.mjs     # ③ 155-param table + pushVoice round-trip + SysEx anchor (26)
 node tools/midi_test.mjs      # ④ transport + device sim (36)
 node tools/strum_test.mjs     # ⑤ strum / humanize / rhythms / scheduler (141)
-node tools/smoke.mjs          # ⑥ page end-to-end, two scenarios (57)
+node tools/sampler_test.mjs   # ⑥ sample pitch math + playback plan (25)
+node tools/smoke.mjs          # ⑦ page end-to-end, three scenarios (74, incl. samples)
 ```
 
-All six exit 0, **297 assertions**. Fresh `git clone` → run → green. The
+All seven exit 0, **339 assertions**. Fresh `git clone` → run → green. The
 external-pack section **loudly SKIPs** when `data/external/` is empty
 (no bytes is the rights-chain norm, not a failure). LF discipline is
 enforced by `.gitattributes`; a CRLF checkout breaks the smoke test by
@@ -144,6 +158,11 @@ in [`docs/voice-sources.md`](docs/voice-sources.md)). Details in
 
 ## Roadmap
 
+- v0.4 (this repo): **sample voices** — upload WAV/MP3 + root note, one sample
+  becomes a whole sample guitar via varispeed; IndexedDB persistence; new
+  `engine/sampler.js` (`FM1_SAMPLER`)
+- v0.3.1: rhythm patterns rebuilt on the guitar arm-motion rule + repositioned
+  as everything-as-guitar
 - v0.3 (this repo): strum realism (spread default 90 ms → ~25 ms total window,
   up-stroke hits top 4 strings only, soft strums drop strings) + guitar voices
   rebuilt on the factory GUITAR 1 skeleton + preview engine now supports

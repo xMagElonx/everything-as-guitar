@@ -60,7 +60,7 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
 </head>
 <body>
 <h1>Everything as Guitar</h1>
-<div class="sub">演奏台 · 给任何音源装上吉他演奏语义：左手选和弦、右手扫弦（下扫/上扫/哑音）、按住连扫、循环节奏型 —— 扫弦引擎只发标准 MIDI，音源三选一：内置 FM 试听（免真机）/ 导入 .syx / 外接任何 MIDI 合成器（FM-1 是第一个实测目标）</div>
+<div class="sub">演奏台 · 给任何音源装上吉他演奏语义：左手选和弦、右手扫弦（下扫/上扫/哑音）、按住连扫、循环节奏型 —— 扫弦引擎只发标准 MIDI，音源四选一：内置 FM 试听（免真机）/ 导入 .syx / 上传采样（WAV/MP3，单采样变调）/ 外接任何 MIDI 合成器（FM-1 是第一个实测目标）</div>
 
 <div class="panel" id="voice-panel">
   <h2>① 音色 <span class="tag">本地选中只影响试听；设备要响同样的音色 → ④「推送到设备」</span></h2>
@@ -70,7 +70,14 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     <button id="btn-load">载入 .syx / .bin 音色库</button>
     <input type="file" id="file-in" accept=".syx,.bin,.mid" multiple style="display:none">
   </div>
-  <div class="dim" id="voice-note">随附 32 个 CC0 音色 + 2 个原创吉他音色（data/guitar.js，实测数据见 design 字段）；也可载入你自己的 DX7 bank。</div>
+  <div class="row">
+    <button id="btn-sample">载入采样（WAV/MP3）</button>
+    <input type="file" id="sample-in" accept="audio/*" style="display:none">
+    <label class="dim">采样根音</label>
+    <select id="sample-root"></select>
+    <button id="btn-sample-del" style="display:none">删除当前采样</button>
+  </div>
+  <div class="dim" id="voice-note">随附 32 个 CC0 音色 + 2 个原创吉他音色（data/guitar.js，实测数据见 design 字段）；也可载入你自己的 DX7 bank，或上传一个 WAV/MP3 采样（录一个吉他单音，变调出整把「采样吉他」）。</div>
 </div>
 
 <div class="panel">
@@ -162,6 +169,7 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
 <script src="engine/params.js"></script>
 <script src="engine/strum.js"></script>
 <script src="engine/seq.js"></script>
+<script src="engine/sampler.js"></script>
 <script src="data/starter.js"></script>
 <script src="data/guitar.js"></script>
 <script>
@@ -196,7 +204,8 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
   var IN_GEST = { 60: 'down', 62: 'up', 64: 'chuck' };   /* C4/D4/E4 */
 
   var S = {
-    voices: [],          /* {name, d, raw, bank} —— raw = 128 字节 packed */
+    voices: [],          /* {name, d, raw, bank} —— raw = 128 字节 packed；
+                            采样条目是 {name, sample:true, root, sampleRate, pcm, dur} */
     sel: -1,
     selChord: 0,
     spreadMs: 5,         /* 每弦错峰毫秒（引擎 spread = 总窗 = spreadMs×(弦数−1)/1000） */
@@ -302,11 +311,18 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     if (added) log('✓ 外部音色包：' + added + ' 个');
   }
 
+  var NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  function noteName(n) { return NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1); }
+
   function rebuildVoiceSel() {
     var html = '';
-    for (var i = 0; i < S.voices.length; i++)
-      html += '<option value="' + i + '">' + esc(S.voices[i].name) +
-              '（' + esc(S.voices[i].bank) + '）</option>';
+    for (var i = 0; i < S.voices.length; i++) {
+      var v = S.voices[i];
+      var label = v.sample
+        ? esc(v.name) + '（采样·根音 ' + noteName(v.root) + '）'
+        : esc(v.name) + '（' + esc(v.bank) + '）';
+      html += '<option value="' + i + '">' + label + '</option>';
+    }
     $('voice-sel').innerHTML = html;
     if (S.sel < 0 && S.voices.length) S.sel = 0;
     $('voice-sel').value = String(S.sel);
@@ -334,6 +350,101 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
       '设备要响同样的音色 → ⑤「推送当前音色到设备」（临时，不 SAVE 断电即失）或发 bank（四步仪式）。';
   }
 
+  /* ================================================================ 采样音色（WAV/MP3 → 变调扫弦）
+     单采样变调：一个采样 + 一个根音，每个和弦音按 playbackRate = 2^((note-root)/12)
+     播放 —— MPC / Mellotron 一脉的经典玩法。数学与持久化在 engine/sampler.js
+     （FM1_SAMPLER，纯函数可测），这里只做文件解码与接线。 */
+  function fillSampleRoots() {
+    var html = '';
+    for (var n = 24; n <= 84; n++)
+      html += '<option value="' + n + '"' + (n === 40 ? ' selected' : '') + '>' +
+              noteName(n) + '</option>';
+    $('sample-root').innerHTML = html;
+  }
+
+  /* 采样条目进 S.voices 尾部（只追加 → 既有索引不漂移）。多声道取 ch0。 */
+  function addSample(name, audioBuf, root) {
+    var v = {
+      name: name, sample: true, root: root,
+      sampleRate: audioBuf.sampleRate,
+      pcm: audioBuf.getChannelData(0),
+      dur: audioBuf.duration
+    };
+    S.voices.push(v);
+    S.sel = S.voices.length - 1;
+    S.cache = {};
+    rebuildVoiceSel();
+    renderVoiceNote();
+    refreshSampleButtons();
+    log('✓ 采样「' + name + '」就绪：' + audioBuf.duration.toFixed(2) + 's @' +
+        audioBuf.sampleRate + 'Hz，根音 ' + noteName(root) +
+        '。扫弦/循环/人性化全部适用；本地试听与 MIDI out 生效，推送不适用。');
+    if (audioBuf.numberOfChannels > 1) log('（多声道采样取第 1 声道）');
+    return v;
+  }
+
+  function loadSampleFile(f) {
+    var root = Number($('sample-root').value);
+    var fr = new FileReader();
+    fr.onload = function () {
+      var ctx = getCtx();
+      if (!ctx || !ctx.decodeAudioData) {
+        log('⚠ 这个环境没有 WebAudio，采样无法解码（只发 MIDI / 只出事件）', 'hot');
+        return;
+      }
+      ctx.decodeAudioData(fr.result, function (audioBuf) {
+        var v = addSample(f.name, audioBuf, root);
+        if (FM1_SAMPLER.idb.available()) {
+          /* pcm 视图的内存归 AudioBuffer 管，持久化前必须拷贝成自己的 ArrayBuffer */
+          var copy = new Float32Array(v.pcm.length);
+          copy.set(v.pcm);
+          FM1_SAMPLER.idb.save({ name: v.name, root: v.root,
+            sampleRate: v.sampleRate, pcm: copy.buffer })
+            .then(function () { log('✓ 采样已存入浏览器（IndexedDB），刷新后自动恢复'); },
+                  function (err) { log('⚠ 采样保存失败（本次会话内仍可用）：' + err, 'hot'); });
+        } else {
+          log('⚠ IndexedDB 不可用（隐私模式？）：采样仅本次会话有效');
+        }
+      }, function (err) {
+        log('⚠ 采样解码失败（' + f.name + '）：' + ((err && err.message) || err), 'hot');
+      });
+    };
+    fr.onerror = function () { log('⚠ 采样文件读取失败：' + f.name, 'hot'); };
+    fr.readAsArrayBuffer(f);
+  }
+
+  function curIsSample() { var v = curVoice(); return !!(v && v.sample); }
+
+  function refreshSampleButtons() {
+    $('btn-sample-del').style.display = curIsSample() ? '' : 'none';
+  }
+
+  /* 刷新后恢复：只追加到 S.voices 尾部 → 既有索引不漂移，无锁安全。
+     不 await、不阻塞自检；失败降级为「重新上传」，不拦路。 */
+  function restoreSamples() {
+    if (!FM1_SAMPLER.idb.available()) return;
+    FM1_SAMPLER.idb.list().then(function (recs) {
+      if (!recs || !recs.length) return;
+      var n = 0;
+      for (var i = 0; i < recs.length; i++) {
+        var r = recs[i];
+        if (!r || typeof r.name !== 'string' ||
+            !(r.pcm instanceof ArrayBuffer) || typeof r.root !== 'number') continue;
+        S.voices.push({ name: r.name, sample: true, root: r.root,
+          sampleRate: r.sampleRate, pcm: new Float32Array(r.pcm),
+          dur: r.pcm.byteLength / 4 / r.sampleRate });
+        n++;
+      }
+      if (!n) return;
+      rebuildVoiceSel();
+      renderVoiceNote();
+      refreshSampleButtons();
+      log('✓ 从浏览器恢复采样音色 ' + n + ' 个（IndexedDB）');
+    }, function () {
+      log('⚠ 采样恢复失败：本次会话内重新上传仍可用', 'hot');
+    });
+  }
+
   /* ================================================================ 本地试听 */
   function getCtx() {
     if (!S.ctx) {
@@ -356,15 +467,30 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
   }
 
   function scheduleNote(ctx, e, when) {
-    var buf = renderNote(S.sel, e.note, e.tOff - e.tOn);
+    var v = S.voices[S.sel];
     var src = ctx.createBufferSource();
-    src.buffer = ctx.createBuffer(1, buf.length, ctx.sampleRate);
-    src.buffer.copyToChannel ? src.buffer.copyToChannel(buf, 0)
-                             : src.buffer.getChannelData(0).set(buf);
     var g = ctx.createGain();
-    g.gain.value = e.velocity / 127;   /* 力度近似：render 没有力度入参，README 已注明 */
-    src.connect(g); g.connect(ctx.destination);
-    src.start(when);
+    g.gain.value = e.velocity / 127;   /* 力度近似：两条路径同款 */
+    if (v && v.sample) {
+      /* 采样路径：变调播放（playbackRate = 2^((note-root)/12)）。
+         FM 把 gate 包络烘焙进 buffer、播完自然结束；采样必须显式 stop，
+         不然降调拉长的尾音会一直响到底。时长由 FM1_SAMPLER.plan 算。 */
+      var buf = ctx.createBuffer(1, v.pcm.length, v.sampleRate);
+      buf.copyToChannel ? buf.copyToChannel(v.pcm, 0)
+                        : buf.getChannelData(0).set(v.pcm);
+      src.buffer = buf;
+      src.playbackRate.value = FM1_SAMPLER.rateFor(e.note, v.root);
+      src.connect(g); g.connect(ctx.destination);
+      src.start(when);
+      src.stop(when + FM1_SAMPLER.plan([e], v.root, v.dur)[0].duration);
+    } else {
+      var buf2 = renderNote(S.sel, e.note, e.tOff - e.tOn);
+      src.buffer = ctx.createBuffer(1, buf2.length, ctx.sampleRate);
+      src.buffer.copyToChannel ? src.buffer.copyToChannel(buf2, 0)
+                               : src.buffer.getChannelData(0).set(buf2);
+      src.connect(g); g.connect(ctx.destination);
+      src.start(when);
+    }
   }
 
   /* 手势路径：相对时序（现在 + 60ms 余量起） */
@@ -420,6 +546,10 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     var out = S.midi.output;
     var v = curVoice();
     if (!out || !v) return;
+    if (v.sample) {
+      log('⚠ 采样音色没有参数字节，无法推送到设备（采样只驱动本地试听与 MIDI out）', 'hot');
+      return;
+    }
     if (!$('ck-confirm').checked) {
       log('⚠ 请先勾选「我知道这条路径没在真机上验证过」', 'hot');
       return;
@@ -436,6 +566,10 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     var out = S.midi.output;
     var v = curVoice();
     if (!out || !v) return;
+    if (v.sample) {
+      log('⚠ 采样音色没有参数字节，闷音宏（改设备端包络）不适用——用哑音扫弦（X / ck-pm）代替', 'hot');
+      return;
+    }
     if (!$('ck-confirm').checked) {
       log('⚠ 请先勾选「我知道这条路径没在真机上验证过」', 'hot');
       return;
@@ -671,6 +805,7 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     $('voice-sel').onchange = function () {
       S.sel = Number($('voice-sel').value);
       S.cache = {};                      /* 换音色，旧渲染全部作废 */
+      refreshSampleButtons();
     };
     $('btn-audition').onclick = function () {
       if (S.sel < 0) return;
@@ -688,6 +823,28 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
       if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length)
         loadFiles(e.dataTransfer.files);
     });
+
+    /* 采样：上传 → 解码 → addSample（含 IDB 持久化）；input.value 清空
+       让同一个文件可以重复上传 */
+    $('btn-sample').onclick = function () { $('sample-in').click(); };
+    $('sample-in').onchange = function () {
+      var files = $('sample-in').files;
+      if (files && files.length) loadSampleFile(files[0]);
+      $('sample-in').value = '';
+    };
+    $('btn-sample-del').onclick = function () {
+      var v = curVoice();
+      if (!v || !v.sample) return;
+      S.voices.splice(S.sel, 1);
+      if (S.sel >= S.voices.length) S.sel = S.voices.length - 1;
+      S.cache = {};
+      rebuildVoiceSel();
+      renderVoiceNote();
+      if (FM1_SAMPLER.idb.available())
+        FM1_SAMPLER.idb.remove(v.name).then(function () {}, function () {});
+      log('✓ 已删除采样「' + v.name + '」（含浏览器里的存档）');
+      refreshSampleButtons();
+    };
 
     $('ck-pm').onchange = function () {};
     $('rng-spread').oninput = function () {
@@ -774,11 +931,13 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
 
   /* ================================================================ 启动 */
   buildPads();
+  fillSampleRoots();
   bindControls();
   loadStarter();
   loadGuitarPack();
   loadExternalPacks();
   selfTest();
+  restoreSamples();
   $('spread-val').textContent = $('rng-spread').value + ' ms/弦';
 })();
 </script>
