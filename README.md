@@ -187,5 +187,17 @@ in [`docs/voice-sources.md`](docs/voice-sources.md)). Details in
   + external-pack pipeline
 - v0.1: chord pads + strum + event mute + local audition + MIDI out
 - next: hammer-on / pull-off / bend macros (device-level, like palm mute),
-  strum-pattern editor, hardware-test feedback folded back in
+  hardware-test feedback folded back in
 - later: a firmware route (JieLi AC791N, simulator-first) — separate decision
+
+### Parking lot (ideas, unscheduled)
+
+- **User-defined strum-pattern editor**: free arrangement of down/up/muted
+  strokes and rests on a visual grid, exported as custom rhythm patterns for
+  the loop. The five built-ins (folk/pop/punk/reggae/ballad) are just the
+  arm-motion rule's starting point — rhythm itself shouldn't be capped by
+  enumeration.
+- **Guitar-shaped interface**: render the whole performance bench as a
+  visible guitar — fretboard and six strings highlighting which string and
+  position every strum event lands on; click and drag across the strings to
+  play. Strumming stops being numbers and becomes something you can see.
