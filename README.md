@@ -1,15 +1,20 @@
-# fm1-guitar
+# everything-as-guitar
 
-**Play the M-VAVE FM-1 like a guitar — in the browser. Or rather: give a
-synthesizer a guitarist's playing semantics.** Chord pads are your fretting
-hand, gesture keys are your strumming hand (down / up / muted chug), space
-toggles a rhythm loop, holding a pad gives a continuous strum — and every
-voice gets strummed, not just guitar patches.
+**Give any sound source a guitarist's playing semantics — the browser is
+the strumming hand, your synthesizer is the voice.** Chord pads are your
+fretting hand, gesture keys are your strumming hand (down / up / muted
+chug), space toggles a rhythm loop, holding a pad gives a continuous
+strum — and every voice gets strummed, not just guitar patches. The strum
+engine emits nothing but standard MIDI notes, so the sound source is your
+choice: the **built-in FM engine** (audition without hardware), **your own
+imported `.syx` voices**, or **any MIDI synthesizer** — FM-1, Dexed, Volca
+FM, a real DX7. **The M-VAVE FM-1 is simply the first, best-tested target**
+(every hardware section below is about it), not the only one.
 
 This is the *performance* counterpart to
 [fm1-tone-engine](https://github.com/xMagElonx/fm1-tone-engine) (the *voice*
-bench: search, edit, write). Separate repos; the byte-level engine is forked
-verbatim — see [`ENGINE-FORK.md`](ENGINE-FORK.md).
+bench: search, edit, write FM/DX7 voices). Separate repos; the byte-level
+engine is forked verbatim — see [`ENGINE-FORK.md`](ENGINE-FORK.md).
 
 ⚠ **Hardware status — testers welcome.** Everything here runs, covered by
 **297 test assertions**, but **the device-facing paths have never touched a
@@ -37,25 +42,32 @@ zone C4/D4/E4 = down/up/chug — with a MIDI keyboard this is the VST
 one-hand playing posture. (Slots map chromatically: G2 picks the 8th pad,
 which is A, not "G major".)
 
-## Where the sound comes from
+## Sound sources: three ways to connect (the engine only sends MIDI; what makes the noise is up to you)
 
-- **32 CC0 starter voices** + **2 original guitar voices** (`data/guitar.js`:
-  AC PLUCK acoustic pluck, EL GTR SUS clean electric). The guitar voices are
-  **measurement-driven**: offline render → measure attack time / windowed
-  spectral-centroid (brightness decay curve) / decay slope → iterate until
-  targets are met. The measurements live in each voice's `design` field;
-  `tools/voice_lab.mjs` re-runs them. The v2 recipes follow the **factory
-  Yamaha GUITAR 1** skeleton (ROM1A #12, dx7dump parameter analysis,
-  independently corroborated by mu:zines "Understanding the DX7"):
-  algorithm 8, feedback 7, 12:3:1 ratio stack, no sustain in any operator,
-  velocity sensitivity (soft strum darker — supported by the local preview
-  engine), key scaling, pitch-EG pluck transient.
-- Every voice can be strummed — **the strum engine is voice-agnostic**;
-  strumming a bell works fine.
-- Load your own `.syx` banks at runtime; license-vetted external packs can
-  go into `data/external/` (inclusion criteria in
-  [`docs/voice-sources.md`](docs/voice-sources.md); packs missing licence
-  fields are **refused** with a log line, never silently loaded).
+1. **Built-in FM engine (no hardware needed)**: 32 CC0 starter voices + 2
+   original guitar voices (`data/guitar.js`: AC PLUCK acoustic pluck,
+   EL GTR SUS clean electric). The guitar voices are **measurement-driven**:
+   offline render → measure attack time / windowed spectral-centroid
+   (brightness decay curve) / decay slope → iterate until targets are met.
+   The measurements live in each voice's `design` field;
+   `tools/voice_lab.mjs` re-runs them. The v2 recipes follow the **factory
+   Yamaha GUITAR 1** skeleton (ROM1A #12, dx7dump parameter analysis,
+   independently corroborated by mu:zines "Understanding the DX7"):
+   algorithm 8, feedback 7, 12:3:1 ratio stack, no sustain in any operator,
+   velocity sensitivity (soft strum darker — supported by the local preview
+   engine), key scaling, pitch-EG pluck transient. Every voice can be
+   strummed — **the strum engine is voice-agnostic**; strumming a bell
+   works fine.
+2. **Bring your own voices**: load your own `.syx` banks at runtime (DX7
+   standard layout), strum them in the built-in engine first, then push to
+   the device when satisfied; license-vetted external packs can go into
+   `data/external/` (inclusion criteria in
+   [`docs/voice-sources.md`](docs/voice-sources.md); packs missing licence
+   fields are **refused** with a log line, never silently loaded).
+3. **Any external MIDI synthesizer**: what goes out is a standard staggered
+   Note On/Off stream — the FM-1 is simply the device with today's longest
+   test checklist; Dexed, a Volca FM, a real DX7, anything with a MIDI IN
+   becomes the voice.
 
 ## Hardware mapping (three steps on the real thing)
 
