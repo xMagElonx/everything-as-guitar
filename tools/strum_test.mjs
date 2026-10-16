@@ -138,20 +138,31 @@ check(eq(S.strum(E6, { pattern: 'down' }).map(e => Math.round(e.tOn * 1000)),
   [0, 5, 10, 15, 20, 25]), '默认 spread=0.025s 总窗 → 每弦 5ms（0..25ms，落在行业 15–35ms 区间）');
 
 /* ------------------------------------------------------------- ⑩ 节奏型 */
-section('⑩ RHYTHMS / expandRhythm：节奏型 → 一小节扫弦时刻表');
+section('⑩ RHYTHMS / expandRhythm：节奏型 → 一小节扫弦时刻表（摆臂法则）');
+/* 摆臂法则：下刷只落正拍、上刷只落反拍。barSec=2.0 @beats4 → 每拍 0.5s */
 const folk = S.expandRhythm('folk', 2.0);
-check(folk.length === 4, 'folk：4 步');
-check(eq(folk.map(s => s.stroke), ['down', 'down', 'up', 'up']), 'folk 手法序列 down-down-up-up');
-check(eq(folk.map(s => s.at), [0, 0.5, 1.0, 1.5]), 'folk@120BPM 时刻 0/0.5/1.0/1.5（手算）');
+check(folk.length === 6, 'folk（万能 D_DU_UDU）：6 步', String(folk.length));
+check(eq(folk.map(s => s.stroke), ['down', 'down', 'up', 'up', 'down', 'up']),
+  'folk 手法序列 down·down·up·up·down·up');
+check(eq(folk.map(s => s.at), [0, 0.5, 0.75, 1.25, 1.5, 1.75]),
+  'folk@120BPM 时刻 0/.5/.75/1.25/1.5/1.75（手算：上刷全在反拍）');
 check(folk.every(s => s.palmMute === false), 'palmMute 默认 false');
-const folkUp = S.expandRhythm('folkUp', 2.0);
-check(folkUp.length === 5 && folkUp[4].at === 1.75, 'folkUp：第 5 步反拍 3.5 → 1.75s');
-const punk = S.expandRhythm('punk', 4);   // 60BPM：一拍一秒，八分 = 0.5s
+const pop = S.expandRhythm('pop', 4);   // 60BPM：一拍一秒，八分 = 0.5s
+check(eq(pop.map(s => s.stroke),
+  ['down', 'up', 'down', 'up', 'down', 'up', 'down', 'up']),
+  'pop：8 个八分严格交替（下落正拍、上落反拍）');
+check(eq(pop.map(s => s.at), [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]), 'pop 时刻（手算）');
+const punk = S.expandRhythm('punk', 4);
 check(eq(punk.map(s => s.at), [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]), 'punk：8 个八分（手算）');
-check(punk.every(s => s.stroke === 'chuck'), 'punk 全部 chuck');
+check(punk.every(s => s.stroke === 'down'), 'punk 全部下刷（真朋克 = 八分全下刷）');
+const reggae = S.expandRhythm('reggae', 2.0);
+check(eq(reggae.map(s => [s.stroke, s.at]),
+  [['up', 0.25], ['up', 0.75], ['up', 1.25], ['up', 1.75]]),
+  'reggae：4 个反拍上刷（正拍全空摆）');
 const ballad = S.expandRhythm('ballad', 2.0);
 check(eq(ballad.map(s => [s.stroke, s.at]),
-  [['down', 0], ['up', 1], ['up', 1.5]]), 'ballad：down 空半小节 up-up');
+  [['down', 0], ['up', 0.75], ['up', 1.25], ['down', 1.5], ['up', 1.75]]),
+  'ballad：D 空U 上 D U（慢歌变体，上刷全在反拍）');
 const custR = S.expandRhythm({ beats: 3, steps: [{ beat: 2.5, stroke: 'down' }] }, 3);
 check(custR.length === 1 && custR[0].at === 2.5, '自定义节奏型 {beats,steps}：beat 2.5/barSec3 → 2.5s');
 const pmR = S.expandRhythm({ beats: 4, steps: [{ beat: 0, stroke: 'down', palmMute: true }] }, 2);

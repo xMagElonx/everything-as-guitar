@@ -12,7 +12,7 @@ bench: search, edit, write). Separate repos; the byte-level engine is forked
 verbatim — see [`ENGINE-FORK.md`](ENGINE-FORK.md).
 
 ⚠ **Hardware status — testers welcome.** Everything here runs, covered by
-**295 test assertions**, but **the device-facing paths have never touched a
+**297 test assertions**, but **the device-facing paths have never touched a
 real FM-1**. The biggest open question and the full unverified list are below.
 
 「Bytes sent」≠「device played it」。 If you have the machine: five minutes
@@ -27,7 +27,7 @@ over **USB**, and negative results are the most useful ones —
 |---|---|
 | `1`–`0` | Select chord (E Em F G C D Dm A Am E7) — selecting is silent, like fretting |
 | `D` / `U` / `X` | Gesture: down strum / up strum / muted chug (one per press) |
-| `Space` | Rhythm loop on/off (folk / folkUp / punk / ballad, adjustable BPM) |
+| `Space` | Rhythm loop on/off (folk universal / pop alternating / punk all-down / reggae offbeat / ballad, adjustable BPM). All follow the arm-motion rule: downstrokes on beats, upstrokes on offbeats (three independent sources agree; punk is all-down eighths per real punk convention) |
 | `[` / `]` | BPM −5 / +5 |
 | `H` | Humanize toggle (±6 ms timing, ±10 velocity per string; seeded, reproducible) |
 | **Hold a pad** | Continuous strum (motor strum); release to stop |
@@ -103,11 +103,11 @@ node tools/dx7_test.mjs       # ① byte codec round-trip (22)
 node tools/starter_test.mjs   # ② every bundled voice renders audible + guitar targets met (15)
 node tools/param_test.mjs     # ③ 155-param table + pushVoice round-trip + SysEx anchor (26)
 node tools/midi_test.mjs      # ④ transport + device sim (36)
-node tools/strum_test.mjs     # ⑤ strum / humanize / rhythms / scheduler (139)
+node tools/strum_test.mjs     # ⑤ strum / humanize / rhythms / scheduler (141)
 node tools/smoke.mjs          # ⑥ page end-to-end, two scenarios (57)
 ```
 
-All six exit 0, **295 assertions**. Fresh `git clone` → run → green. The
+All six exit 0, **297 assertions**. Fresh `git clone` → run → green. The
 external-pack section **loudly SKIPs** when `data/external/` is empty
 (no bytes is the rights-chain norm, not a failure). LF discipline is
 enforced by `.gitattributes`; a CRLF checkout breaks the smoke test by

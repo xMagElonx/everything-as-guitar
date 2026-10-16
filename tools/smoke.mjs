@@ -238,12 +238,13 @@ section('A6 空格 = 循环节奏型开关');
 const barStarts = FakeAC().starts.length;     /* 快照必须取在开循环之前 */
 fireKey(' ');
 check(/▶ 循环开始：节奏型 folk @100 BPM/.test(els.log.textContent), '空格开循环（folk）');
-/* folk @100BPM barSec = 2.4s；第一小节已排（down 6 + down 6 + up 4 + up 4 = 20） */
-check(FakeAC().starts.length - barStarts === 20, '第一小节 = down×6 + up×4 → 20 源（上扫只扫高 4 弦）',
-  String(FakeAC().starts.length - barStarts) + ' vs 20');
+/* folk（万能 D_DU_UDU）@100BPM barSec = 2.4s；第一小节已排。
+   当前选中 = A5 按住过的 Em（6 音）：down 全弦 6 音 ×3 + up 高 4 弦 4 音 ×3 = 30 */
+check(FakeAC().starts.length - barStarts === 30, '第一小节 = down×6音×3 + up×4音×3 → 30 源',
+  String(FakeAC().starts.length - barStarts) + ' vs 30');
 advanceSeq(2.4);
-check(FakeAC().starts.length - barStarts === 40, '推进一小节 → 第二小节也排出（共 40）',
-  String(FakeAC().starts.length - barStarts) + ' vs 40');
+check(FakeAC().starts.length - barStarts === 60, '推进一小节 → 第二小节也排出（共 60）',
+  String(FakeAC().starts.length - barStarts) + ' vs 60');
 fireKey(' ');
 check(/■ 循环停止/.test(els.log.textContent), '空格关循环');
 const after7 = FakeAC().starts.length;

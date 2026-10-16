@@ -4,7 +4,7 @@
 
 这是 [fm1-tone-engine](https://github.com/xMagElonx/fm1-tone-engine)（**音色台**：检索、编辑、写入）的姊妹项目 —— 演奏台。两个项目独立建仓，字节级引擎原样共用（出处见 [`ENGINE-FORK.md`](ENGINE-FORK.md)）。
 
-⚠ **硬件状态 —— 欢迎来测。** 这一页全部能跑、有 **295 项测试断言**罩着，但**面向设备的路径从来没碰过真机**。最大的未知数与全部未验证项见下方清单。
+⚠ **硬件状态 —— 欢迎来测。** 这一页全部能跑、有 **297 项测试断言**罩着，但**面向设备的路径从来没碰过真机**。最大的未知数与全部未验证项见下方清单。
 
 「字节已发出」≠「设备已发声/已执行」。有琴的朋友：USB 连上五分钟，**阴性结果（没反应/不对劲）对我们最有价值** —— 请开 issue。
 
@@ -16,7 +16,7 @@
 |---|---|
 | `1`–`0` | 选中和弦（E Em F G C D Dm A Am E7）—— 选中不发声，相当于左手按弦 |
 | `D` / `U` / `X` | 手势：下扫 / 上扫 / 闷音 chug（按一次扫一次） |
-| `空格` | 循环节奏型开/关（folk / folkUp / punk / ballad，BPM 可调） |
+| `空格` | 循环节奏型开/关（folk 万能 / pop 全交替 / punk 全下刷 / reggae 反拍 / ballad 慢歌，BPM 可调）。全部遵守吉他摆臂法则：下刷落正拍、上刷落反拍（Sukoon Music Academy / GuitarStartGuide / TrueMetronome 三源一致，punk 按真朋克惯例改为八分全下刷） |
 | `[` / `]` | BPM −5 / +5 |
 | `H` | 人性化开关（每弦 ±6ms 时机、±10 力度抖动，固定种子可复现） |
 | **按住和弦垫** | 连扫（motor strum），松手停 |
@@ -62,11 +62,11 @@ node tools/dx7_test.mjs       # ① 字节编解码往返（22）
 node tools/starter_test.mjs   # ② 随附音色全部可发声 + 吉他音色达标（15）
 node tools/param_test.mjs     # ③ 155 参数表 + pushVoice 往返 + SysEx 锚点（26）
 node tools/midi_test.mjs      # ④ 传输层 + 设备模拟（36）
-node tools/strum_test.mjs     # ⑤ 扫弦/人性化/节奏型/调度器（139）
+node tools/strum_test.mjs     # ⑤ 扫弦/人性化/节奏型/调度器（141）
 node tools/smoke.mjs          # ⑥ 页面端到端，两场景（57）
 ```
 
-六条全部退出 0，共 **295 项断言**。全新 `git clone` → 跑 → 全绿。外部包段在 `data/external/` 为空时**大声 SKIP**（无字节是权利链常态，不是失败）。LF 行尾纪律由 `.gitattributes` 强制；Windows 上若被改成 CRLF，冒烟测试会**故意**崩 —— 那个文件别删。
+六条全部退出 0，共 **297 项断言**。全新 `git clone` → 跑 → 全绿。外部包段在 `data/external/` 为空时**大声 SKIP**（无字节是权利链常态，不是失败）。LF 行尾纪律由 `.gitattributes` 强制；Windows 上若被改成 CRLF，冒烟测试会**故意**崩 —— 那个文件别删。
 
 ## 许可
 

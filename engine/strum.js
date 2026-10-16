@@ -270,21 +270,35 @@
   /* ---- 节奏型表：显式步进数据，不用字符串 DSL ----
      beats = 每小节拍数（四分音符），steps 里 beat 允许小数（反拍）。
      stroke ∈ PATTERNS 键集；palmMute: true 的步把事件级闷音传给 strum()。 */
+  /* ---- 内置节奏型：全部遵守「摆臂法则」----
+     下刷只落正拍（1 2 3 4）、上刷只落反拍（&）、空拍 = 手臂摆过去不碰弦。
+     手臂像钟摆匀速下上，上下刷的位置由物理决定 —— 这是吉他教学法里
+     「下下上上」不成立的根因（上刷被摆到了正拍上），见计划文件调研节
+     （Sukoon Music Academy / GuitarStartGuide / TrueMetronome 三源一致）。
+     folk = 全球吉他课第一课的「万能节奏」D _ D U _ U D U（第 3 拍空摆）。
+     punk = 真朋克是八分音符全下刷（下刷的攻击性就是朋克的声音）；
+     雷鬼 = 纯反拍上刷；ballad = 慢歌常用变体 D _ _ U _ U D U。 */
   var RHYTHMS = {
-    folk:   { beats: 4, steps: [
+    folk: { beats: 4, steps: [
       { beat: 0, stroke: 'down' }, { beat: 1, stroke: 'down' },
-      { beat: 2, stroke: 'up' },   { beat: 3, stroke: 'up' }] },
-    folkUp: { beats: 4, steps: [
-      { beat: 0, stroke: 'down' }, { beat: 1, stroke: 'down' },
-      { beat: 2, stroke: 'up' },   { beat: 3, stroke: 'up' },
-      { beat: 3.5, stroke: 'up' }] },
-    punk:   { beats: 4, steps: (function () {
+      { beat: 1.5, stroke: 'up' }, { beat: 2.5, stroke: 'up' },
+      { beat: 3, stroke: 'down' }, { beat: 3.5, stroke: 'up' }] },
+    pop: { beats: 4, steps: (function () {
       var s = [];
-      for (var k = 0; k < 8; k++) s.push({ beat: k * 0.5, stroke: 'chuck' });
+      for (var k = 0; k < 8; k++)
+        s.push({ beat: k * 0.5, stroke: k % 2 === 0 ? 'down' : 'up' });
       return s; })() },
+    punk: { beats: 4, steps: (function () {
+      var s = [];
+      for (var k = 0; k < 8; k++) s.push({ beat: k * 0.5, stroke: 'down' });
+      return s; })() },
+    reggae: { beats: 4, steps: [
+      { beat: 0.5, stroke: 'up' }, { beat: 1.5, stroke: 'up' },
+      { beat: 2.5, stroke: 'up' }, { beat: 3.5, stroke: 'up' }] },
     ballad: { beats: 4, steps: [
-      { beat: 0, stroke: 'down' }, { beat: 2, stroke: 'up' },
-      { beat: 3, stroke: 'up' }] },
+      { beat: 0, stroke: 'down' }, { beat: 1.5, stroke: 'up' },
+      { beat: 2.5, stroke: 'up' }, { beat: 3, stroke: 'down' },
+      { beat: 3.5, stroke: 'up' }] },
   };
 
   /* ---- 节奏型 → 一小节内的扫弦时刻表 ----
