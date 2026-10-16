@@ -201,3 +201,10 @@ in [`docs/voice-sources.md`](docs/voice-sources.md)). Details in
   visible guitar — fretboard and six strings highlighting which string and
   position every strum event lands on; click and drag across the strings to
   play. Strumming stops being numbers and becomes something you can see.
+- **fm1-firmware-dev agent skill, open-sourced**: turn the firmware line's
+  working discipline into a publishable agent skill — toolchain wrapping
+  (build/flash/debug as subcommands), three-environment labeling
+  (simulator / host / hardware, never mixed), double brick-gate (verified
+  recovery path + owner consent), differential-test discipline. No JieLi
+  skill exists anywhere — the niche is empty. Others ship firmware; we ship
+  the methodology of shipping it reliably.
