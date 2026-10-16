@@ -25,11 +25,14 @@
   'use strict';
 
   /* pattern 表：数据驱动。order 是拨弦次序，muted 是哑音扫弦标记，
-     velHigh/velLow 是该 pattern 的默认力度端点（上扫整体偏轻）。
+     velHigh/velLow 是该 pattern 的默认力度端点，strings 是弦宽
+     （从拨弦方向那端数起：上扫只带高音 4 弦 —— 真实扫弦里上扫不碰低音弦，
+     这是 modwheel.net 扫弦指南 + RealGuitar 手册一致的行业事实；
+     下扫/chuck 全弦）。up 端点 = down 端点 − 15（上扫整体偏轻）。
      自定义 pattern = 传入同构对象即可，不加新代码分支。 */
   var PATTERNS = {
-    down:  { order: 'low-to-high', muted: false, velHigh: 112, velLow: 76 },
-    up:    { order: 'high-to-low', muted: false, velHigh: 96,  velLow: 68 },
+    down:  { order: 'low-to-high', muted: false, velHigh: 112, velLow: 76, strings: 6 },
+    up:    { order: 'high-to-low', muted: false, velHigh: 97,  velLow: 61, strings: 4 },
     chuck: { order: 'low-to-high', muted: true,  velHigh: 58,  velLow: 45 },
   };
 
@@ -57,11 +60,16 @@
   }
 
   /* ---- 核心：和弦 + pattern + 时序 → 事件序列 ----
-     opts.pattern: 'down' | 'up' | 'chuck' 或自定义 { order, muted, velHigh, velLow }
-     opts.spread:  扫弦总时长（秒），默认 0.09
+     opts.pattern: 'down' | 'up' | 'chuck' 或自定义 { order, muted, velHigh, velLow, strings }
+     opts.spread:  扫弦总时长（秒），默认 0.025 —— 6 弦每弦 5ms，总窗 25ms，
+                   落在真实拨片的 15–35ms 区间（旧默认 0.09 慢了近 4 倍且每弦
+                   18ms，是「像竖琴不像扫弦」的第一主因，见计划文件调研节）
      opts.gate:    每音保持（秒），默认 1.2（chuck/闷音会钳得更短）
      opts.velHigh / opts.velLow: 力度端点（覆盖 pattern 默认）
      opts.palmMute: true → 事件级闷音，每音时值钳到 MUTE_GATE
+     opts.stringBudget: true → 力度决定弦数（RealGuitar「Dyn=Velo Strum」式）：
+                   第一根被拨弦的力度（velHigh）≥112 全弦、≤64 只响最低 3 弦，
+                   线性内插，保低音侧。轻扫 = 少而低沉，重扫 = 全弦轰鸣。
      返回 [{ note, velocity, tOn, tOff, string, stroke }]，时间单位秒，
      string = 原始弦位（0 = 最低音弦），stroke = 拨弦次序（0 = 第一个被拨到）。 */
   function strum(notes, opts) {
@@ -76,12 +84,13 @@
       if (opts.pattern.order !== 'low-to-high' && opts.pattern.order !== 'high-to-low')
         throw new Error('自定义 pattern.order 必须是 low-to-high 或 high-to-low');
       pattern = { order: opts.pattern.order, muted: !!opts.pattern.muted,
-                  velHigh: opts.pattern.velHigh, velLow: opts.pattern.velLow };
+                  velHigh: opts.pattern.velHigh, velLow: opts.pattern.velLow,
+                  strings: opts.pattern.strings };
     } else {
       throw new Error('缺 pattern：down / up / chuck，或 {order, muted} 对象');
     }
 
-    var spread = opts.spread == null ? 0.09 : opts.spread;
+    var spread = opts.spread == null ? 0.025 : opts.spread;
     var gate = opts.gate == null ? 1.2 : opts.gate;
     if (!isPosNum(spread)) throw new Error('spread 必须是正数，实际 ' + spread);
     if (!isPosNum(gate)) throw new Error('gate 必须是正数，实际 ' + gate);
@@ -95,18 +104,38 @@
     /* 力度不用隐藏钳制：chuck 的低力度来自 PATTERNS 默认端点，用户显式
        覆盖 velHigh/velLow 就按用户的来 —— 静默改值正是本项目禁止的掩码行为。 */
 
-    var n = notes.length;
-    var step = spread / (n - 1);          // 每弦错峰间隔
-    var orderIdx = [];                    // 拨弦次序 → 原始弦位
-    for (var k = 0; k < n; k++)
-      orderIdx.push(pattern.order === 'low-to-high' ? k : n - 1 - k);
+    /* ---- 有效弦集合：先按 pattern 弦宽截（拨弦方向那端），再按力度预算截 ----
+       弦宽超过和弦弦数时取全部弦 —— 物理上不可能扫出比和弦更多的弦，
+       这是约束不是错误。stringBudget 再保低音侧截（轻扫少而低沉）。 */
+    var n0 = notes.length;
+    var width = pattern.strings == null ? n0 : pattern.strings;
+    if (width !== Math.floor(width) || width < 2)
+      throw new Error('pattern.strings 必须是 ≥2 的整数，实际 ' + width);
+    if (width > n0) width = n0;
+    var lo = 0, hi = n0 - 1;
+    if (pattern.order === 'high-to-low') lo = n0 - width;   /* 上扫：保高音侧 */
+    else hi = width - 1;                                    /* 下扫：保低音侧 */
+    if (opts.stringBudget && !pattern.muted) {
+      /* 哑音扫弦（chuck/自定义 muted）不参与预算：它的意义就是全弦闷响，
+         而它的力度端点天然低于预算下限，参与预算会被永久砍到 3 弦。
+         事件级闷音（palmMute）照常参与 —— 轻的闷下扫少几根弦是成立的。 */
+      var frac = (velHigh - 64) / (112 - 64);
+      if (frac < 0) frac = 0;
+      if (frac > 1) frac = 1;
+      var budget = Math.round(3 + (width - 3) * frac);
+      if (budget < 2) budget = 2;
+      if (budget > width) budget = width;
+      hi = lo + budget - 1;                                 /* 预算截弦：保低音侧 */
+    }
+    var n = hi - lo + 1;                    /* n ≥ 2：budget/width 下限保证 */
 
+    var step = spread / (n - 1);            // 每弦错峰间隔
     var out = [];
     for (var s = 0; s < n; s++) {
-      var idx = orderIdx[s];
+      var idx = pattern.order === 'low-to-high' ? lo + s : hi - s;
       var tOn = s * step;
       /* 力度沿「拨弦次序」线性递减：先被拨到的弦最响。
-         单弦扫弦（n=1）已被 checkNotes 拦下，这里 n ≥ 2 不会除零。 */
+         单弦扫弦（n=1）不可能到达（弦集合下限 2），这里不会除零。 */
       var vel = Math.round(velHigh + (velLow - velHigh) * (s / (n - 1)));
       var tOff = tOn + (muted ? capGate : gate);
       out.push({ note: notes[idx], velocity: vel, tOn: tOn, tOff: tOff,

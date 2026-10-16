@@ -23,3 +23,8 @@ side by side.
 
 New code in this repo (everything else): `engine/strum.js`, the page, and the
 test suites — MIT, same author.
+
+## 同步记录
+
+- 2026-10-16：engine/fm.js 逐字节同步自上游 @ fe34636（新增 render 可选参数
+  `velocity:`（力度→算子电平）与 `bend:`（音高包络）；engine_test 28→42）。

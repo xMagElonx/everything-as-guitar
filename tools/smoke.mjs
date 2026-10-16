@@ -59,7 +59,7 @@ function makeEl(id) {
 }
 const els = {};
 for (const id of ['voice-sel', 'btn-audition', 'btn-load', 'file-in', 'voice-note',
-  'pads', 'ck-pm', 'rng-spread', 'spread-val',
+  'pads', 'ck-pm', 'rng-spread', 'spread-val', 'ck-budget',
   'btn-down', 'btn-up', 'btn-chuck', 'ck-hum', 'rng-humt', 'humt-val', 'rng-humv', 'humv-val',
   'sel-rhythm', 'rng-bpm', 'bpm-val', 'in-seed', 'btn-dice', 'btn-loop',
   'btn-connect', 'port-sel', 'ck-send', 'btn-push', 'btn-note', 'btn-pmmacro', 'ck-confirm',
@@ -68,7 +68,8 @@ for (const id of ['voice-sel', 'btn-audition', 'btn-load', 'file-in', 'voice-not
 }
 els.log.textContent = '';
 els.rngSpread = els['rng-spread'];
-els.rngSpread.value = '90';
+els.rngSpread.value = '5';
+els['ck-budget'].checked = true;
 els['rng-bpm'].value = '100';
 els['rng-humt'].value = '6';
 els['rng-humv'].value = '10';
@@ -198,8 +199,9 @@ check(els.pads.children[4].className === 'pad sel' && els.pads.children[0].class
 
 section('A4 手势键 = 一次扫弦（含人性化，独立复算对齐）');
 els['btn-down'].onclick();
+/* 页面默认：滑杆 5ms/弦 × 4 间隔 = 总窗 0.02s；轻扫减弦开（down velHigh 112 = 满力度不截） */
 const evE = STRUM.humanize(
-  STRUM.strum([48, 52, 55, 60, 64], { pattern: 'down', spread: 0.09, palmMute: false }),
+  STRUM.strum([48, 52, 55, 60, 64], { pattern: 'down', spread: 0.02, palmMute: false, stringBudget: true }),
   { seed: gestureSeed(), timingMs: 6, velJitter: 10 });
 check(FakeAC().starts.length === evE.length, 'C 和弦 5 音符 → 5 个新源（种子 n=0）',
   FakeAC().starts.length + ' vs ' + evE.length);
@@ -236,12 +238,12 @@ section('A6 空格 = 循环节奏型开关');
 const barStarts = FakeAC().starts.length;     /* 快照必须取在开循环之前 */
 fireKey(' ');
 check(/▶ 循环开始：节奏型 folk @100 BPM/.test(els.log.textContent), '空格开循环（folk）');
-/* folk @100BPM barSec = 2.4s；第一小节已排（4 步 × 6 音符 = 24） */
-check(FakeAC().starts.length - barStarts === 24, '第一小节 = 4 步 × 6 音符（24 源）',
-  String(FakeAC().starts.length - barStarts) + ' vs 24');
+/* folk @100BPM barSec = 2.4s；第一小节已排（down 6 + down 6 + up 4 + up 4 = 20） */
+check(FakeAC().starts.length - barStarts === 20, '第一小节 = down×6 + up×4 → 20 源（上扫只扫高 4 弦）',
+  String(FakeAC().starts.length - barStarts) + ' vs 20');
 advanceSeq(2.4);
-check(FakeAC().starts.length - barStarts === 48, '推进一小节 → 第二小节也排出（共 48）',
-  String(FakeAC().starts.length - barStarts) + ' vs 48');
+check(FakeAC().starts.length - barStarts === 40, '推进一小节 → 第二小节也排出（共 40）',
+  String(FakeAC().starts.length - barStarts) + ' vs 40');
 fireKey(' ');
 check(/■ 循环停止/.test(els.log.textContent), '空格关循环');
 const after7 = FakeAC().starts.length;
@@ -305,8 +307,9 @@ check(els.pads.children[3].className === 'pad sel', '键盘 4 → G 垫选中');
 const sentBefore2 = port.sent.length;
 fireKey('d');                                 /* 下扫 */
 const justSent = port.sent.slice(sentBefore2);
+/* 页面默认：5ms/弦 × 5 间隔 = 总窗 0.025s；轻扫减弦开（down 满力度不截） */
 const expectEv = STRUM.humanize(
-  STRUM.strum([43, 47, 50, 55, 59, 67], { pattern: 'down', spread: 0.09, palmMute: false }),
+  STRUM.strum([43, 47, 50, 55, 59, 67], { pattern: 'down', spread: 0.025, palmMute: false, stringBudget: true }),
   { seed: gestureSeed(), timingMs: 6, velJitter: 10 });
 const expectMsgs = STRUM.eventsToMidi(expectEv, 0);
 check(justSent.length === expectMsgs.length, '消息条数 = 2×音符数（On/Off 成对）',
@@ -345,7 +348,7 @@ const steps = STRUM.expandRhythm('folk', barSec);
 let expectEvents = [];
 steps.forEach((st, i) => {
   const evs = STRUM.humanize(
-    STRUM.strum([41, 48, 53, 57, 60, 65], { pattern: st.stroke, spread: 0.09 }),
+    STRUM.strum([41, 48, 53, 57, 60, 65], { pattern: st.stroke, spread: 0.025, stringBudget: true }),
     { seed: STRUM.barSeed(1, 0 * 8 + i), timingMs: 6, velJitter: 10 });
   for (const e of evs)
     expectEvents.push({ note: e.note, velocity: e.velocity,

@@ -87,10 +87,11 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     <label class="ck"><input type="checkbox" id="ck-pm"> 闷音（掌缘，事件级）</label>
   </div>
   <div class="row">
-    <span class="lbl">扫弦时长</span>
-    <input type="range" id="rng-spread" min="40" max="200" step="5" value="90">
-    <span class="dim" id="spread-val">90 ms</span>
-    <span class="dim">（真实拨片一次下扫约 60–120ms；上扫更快更轻）</span>
+    <span class="lbl">扫弦速度</span>
+    <input type="range" id="rng-spread" min="1" max="15" step="1" value="5">
+    <span class="dim" id="spread-val">5 ms/弦</span>
+    <span class="dim">（真实扫弦总窗 15–35ms：快扫每弦 2–3ms、慢民谣 6–8ms）</span>
+    <label class="ck"><input type="checkbox" id="ck-budget" checked> 轻扫减弦</label>
   </div>
   <div class="row">
     <span class="lbl">人性化</span>
@@ -197,7 +198,7 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     voices: [],          /* {name, d, raw, bank} —— raw = 128 字节 packed */
     sel: -1,
     selChord: 0,
-    spread: 0.09,
+    spreadMs: 5,         /* 每弦错峰毫秒（引擎 spread = 总窗 = spreadMs×(弦数−1)/1000） */
     ctx: null,
     cache: {},
     midi: { access: null, output: null, input: null },
@@ -467,7 +468,9 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
   function fireGesture(stroke) {
     var chord = CHORDS[S.selChord];
     var evs = FM1_STRUM.strum(chord.notes, {
-      pattern: stroke, palmMute: $('ck-pm').checked, spread: S.spread });
+      pattern: stroke, palmMute: $('ck-pm').checked,
+      spread: S.spreadMs * (chord.notes.length - 1) / 1000,
+      stringBudget: $('ck-budget').checked });
     evs = humanized(evs, FM1_STRUM.barSeed(S.loop.seed, 100000 + (S.gestureCount++)));
     if (S.sel >= 0) playEvents(evs);
     else log('（未选音色：只算了事件，没出声）');
@@ -490,7 +493,9 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
     for (var i = 0; i < steps.length; i++) {
       var st = steps[i];
       var evs = FM1_STRUM.strum(chord.notes,
-        { pattern: st.stroke, palmMute: st.palmMute, spread: S.spread });
+        { pattern: st.stroke, palmMute: st.palmMute,
+          spread: S.spreadMs * (chord.notes.length - 1) / 1000,
+          stringBudget: $('ck-budget').checked });
       evs = humanized(evs, FM1_STRUM.barSeed(S.loop.seed, barIndex * 8 + i));
       for (var j = 0; j < evs.length; j++) {
         var e = evs[j];
@@ -685,8 +690,8 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
 
     $('ck-pm').onchange = function () {};
     $('rng-spread').oninput = function () {
-      S.spread = Number($('rng-spread').value) / 1000;
-      $('spread-val').textContent = $('rng-spread').value + ' ms';
+      S.spreadMs = Number($('rng-spread').value);
+      $('spread-val').textContent = S.spreadMs + ' ms/弦';
     };
     $('ck-hum').onchange = function () {
       S.humanize.on = $('ck-hum').checked;
@@ -773,7 +778,7 @@ summary { cursor:pointer; color:var(--dim); font-size:13px; }
   loadGuitarPack();
   loadExternalPacks();
   selfTest();
-  $('spread-val').textContent = $('rng-spread').value + ' ms';
+  $('spread-val').textContent = $('rng-spread').value + ' ms/弦';
 })();
 </script>
 </body>

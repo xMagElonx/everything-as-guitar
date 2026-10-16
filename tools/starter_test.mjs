@@ -111,19 +111,22 @@ section('⑥ data/guitar.js：原创吉他音色（解码 + 渲染 + design 完�
     }
   }
   check(gBad === 0, '2 音色：raw 256 hex、往返无损、算法合法、design.measured 在、C3/C5 出声', gWho);
-  /* 目标断言：make_guitar 的量化目标（数据说话，不是"大概听感"） */
+  /* 目标断言：make_guitar 的量化目标（数据说话，不是"大概听感"）。
+     brightDrop = 前 50ms 质心 / 200–400ms 质心 —— 量「亮→暗」的时间形状。 */
   const pluck = G.voices.find(v => v.name === 'AC PLUCK');
   const sust = G.voices.find(v => v.name === 'EL GTR SUS');
   check(pluck && pluck.design.measured.note48.attackMs < 12 &&
-        pluck.design.measured.note48.centroidRatio >= 2 &&
+        pluck.design.measured.note48.brightDrop >= 2 &&
         parseFloat(pluck.design.measured.note48.decay30s) >= 0.8 &&
-        parseFloat(pluck.design.measured.note48.decay30s) <= 1.5,
-    'AC PLUCK 达标：起音<12ms、质心比≥2、-30dB 0.8–1.5s（C3，实测数据）',
+        parseFloat(pluck.design.measured.note48.decay30s) <= 1.5 &&
+        pluck.design.measured.note48.brightVelRatio > 1.1,
+    'AC PLUCK 达标：起音<12ms、亮→暗比≥2、-30dB 0.8–1.5s、轻扫更暗>1.1×（C3 实测）',
     JSON.stringify(pluck && pluck.design.measured.note48));
   check(sust && sust.design.measured.note48.attackMs < 10 &&
-        sust.design.measured.note48.centroidRatio < 1.5 &&
-        sust.design.measured.note48.sustainDropDb > -3,
-    'EL GTR SUS 达标：起音<10ms、质心比<1.5、平台跌落<3dB（实测数据）',
+        sust.design.measured.note48.brightDrop < 1.5 &&
+        sust.design.measured.note48.sustainDropDb > -3 &&
+        sust.design.measured.note48.brightVelRatio > 1.1,
+    'EL GTR SUS 达标：起音<10ms、亮→暗比<1.5、平台跌落<3dB、轻扫更暗>1.1×（实测）',
     JSON.stringify(sust && sust.design.measured.note48));
 }
 

@@ -50,13 +50,17 @@ check(ev.every(e => Math.abs(e.tOff - (e.tOn + 1.2)) < 1e-9), 'gate 1.2s：tOff 
 check(ev[0].stroke === 0 && ev[5].stroke === 5, 'stroke = 拨弦次序');
 
 /* ------------------------------------------------------------- ③ up */
-section('③ up：反序 + 力度端点 96/68');
+section('③ up：只扫最高 4 弦 + 力度端点 97/61（行业事实：上扫不带低音弦）');
 const up = S.strum(E6, { pattern: 'up', spread: 0.09, gate: 1.2 });
-check(eq(up.map(e => e.string), [5, 4, 3, 2, 1, 0]), '上扫：高弦 → 低弦');
-check(eq(up.map(e => e.note), E6.slice().reverse()), '音符顺序反转为高音先');
-check(eq(up.map(e => e.velocity), [96, 90, 85, 79, 74, 68]),
-  '上扫力度 96 → 68（先被拨到的高弦最响）');
-check(eq(up.map(e => Math.round(e.tOn * 1000)), [0, 18, 36, 54, 72, 90]), '时序仍单调');
+check(up.length === 4, '上扫 6 弦和弦 → 只响最高 4 弦（modwheel 指南 + RealGuitar 一致）');
+check(eq(up.map(e => e.string), [5, 4, 3, 2]), '上扫：高弦 → 低弦（仅最高 4 弦）');
+check(eq(up.map(e => e.note), [64, 59, 56, 52]), '音符 = 最高 4 弦，高音先');
+check(eq(up.map(e => e.velocity), [97, 85, 73, 61]),
+  '上扫力度 97 → 61（down 端点 −15，4 弦递减手算）');
+check(eq(up.map(e => Math.round(e.tOn * 1000)), [0, 30, 60, 90]), '时序单调（4 弦 → 步长 30ms）');
+check(S.PATTERNS.up.velHigh === S.PATTERNS.down.velHigh - 15 &&
+      S.PATTERNS.up.velLow === S.PATTERNS.down.velLow - 15,
+  'up 端点 = down 端点 − 15（数据自洽）');
 
 /* ------------------------------------------------------------- ④ chuck */
 section('④ chuck：哑音扫弦 = 短 gate + 低力度');
@@ -130,6 +134,8 @@ check(JSON.stringify(S.strum(E6, { pattern: 'down' })) ===
       JSON.stringify(S.strum(E6, { pattern: 'down' })), '两次调用逐字段相同');
 const two = S.strum([40, 47], { pattern: 'down', spread: 0.06 });
 check(eq(two.map(e => Math.round(e.tOn * 1000)), [0, 60]), '双弦扫弦：间隔 = spread/(n-1) = 60ms');
+check(eq(S.strum(E6, { pattern: 'down' }).map(e => Math.round(e.tOn * 1000)),
+  [0, 5, 10, 15, 20, 25]), '默认 spread=0.025s 总窗 → 每弦 5ms（0..25ms，落在行业 15–35ms 区间）');
 
 /* ------------------------------------------------------------- ⑩ 节奏型 */
 section('⑩ RHYTHMS / expandRhythm：节奏型 → 一小节扫弦时刻表');
@@ -350,6 +356,47 @@ pending.slice().sort((a, b) => a.at - b.at).forEach(p => { fakeNow = Math.max(fa
 check(run3.got.length === cnt3 + 1, '挂起恢复：积压小节全部跳过，单次 tick 只补排 1 小节');
 check(run3.got[run3.got.length - 1].barStart === 110, '补排的是当前时刻的小节（110 = 100+10）');
 run3.player.stop();
+
+/* ------------------------------------------------------------- ⑭ 弦宽与预算 */
+section('⑭ 弦宽（pattern.strings）与力度预算（stringBudget，RealGuitar Dyn 式）');
+/* 自定义弦宽：保拨弦方向那端 —— low-to-high 保低音侧 3 弦 */
+const w3 = S.strum(E6, { pattern: { order: 'low-to-high', muted: false,
+  velHigh: 100, velLow: 60, strings: 3 }, spread: 0.09 });
+check(w3.length === 3 && eq(w3.map(e => e.string), [0, 1, 2]),
+  '自定义 strings=3 → 保低音侧（弦位 0/1/2）');
+check(eq(w3.map(e => e.velocity), [100, 80, 60]), '力度在 3 弦上重排 100 → 60');
+/* 上扫弦宽：保高音侧（内建 up strings=4 已测）；弦宽超过和弦 → 取全部弦 */
+const two2 = S.strum([40, 47], { pattern: 'up', spread: 0.06 });
+check(two2.length === 2 && eq(two2.map(e => e.string), [1, 0]),
+  '弦宽 > 和弦弦数 → 取全部弦（物理约束，非错误）');
+/* stringBudget：默认 down（velHigh 112）→ 全弦，与不开预算逐字节相同 */
+check(JSON.stringify(S.strum(E6, { pattern: 'down', stringBudget: true })) ===
+      JSON.stringify(S.strum(E6, { pattern: 'down' })),
+  'velHigh 112 = 满力度 → 预算不截弦（与无预算逐字节相同）');
+/* 轻扫（velHigh 70）：frac=(70-64)/48=0.125 → budget=round(3.375)=3 → 最低 3 弦 */
+const light = S.strum(E6, { pattern: 'down', velHigh: 70, velLow: 50, stringBudget: true });
+check(light.length === 3 && eq(light.map(e => e.string), [0, 1, 2]),
+  '轻扫 velHigh=70 → 只响最低 3 弦（手算 budget=3）');
+check(eq(light.map(e => e.velocity), [70, 60, 50]), '轻扫力度在保留下来的弦上重排');
+/* 极轻（velHigh 60 < 64 下限）：clamp 0 → 3 弦；up 保高音侧 4 弦后预算再保低侧 */
+const vLightUp = S.strum(E6, { pattern: 'up', velHigh: 60, velLow: 40, stringBudget: true });
+check(vLightUp.length === 3 && eq(vLightUp.map(e => e.string), [4, 3, 2]),
+  '极轻上扫：先保高音 4 弦（2..5）、预算再保低侧 3 弦（2/3/4），高弦先拨');
+check(eq(vLightUp.map(e => e.velocity), [60, 50, 40]), '极轻上扫力度 60 → 40');
+/* 预算 ≥ 弦宽时不截：up 默认 velHigh 97 → frac=0.6875 → budget 5 > 弦宽 4 */
+check(S.strum(E6, { pattern: 'up', stringBudget: true }).length === 4,
+  'up 默认力度：预算(5) ≥ 弦宽(4) → 不截');
+/* 哑音扫弦不参与预算：chuck 力度天然低于下限，参与预算会被永久砍到 3 弦 */
+check(JSON.stringify(S.strum(E6, { pattern: 'chuck', stringBudget: true })) ===
+      JSON.stringify(S.strum(E6, { pattern: 'chuck' })),
+  'chuck + stringBudget → 与无预算逐字节相同（哑音扫弦 = 全弦闷响，预算不适用）');
+/* 校验：strings 非法 */
+throws(() => S.strum(E6, { pattern: { order: 'low-to-high', muted: false,
+  velHigh: 100, velLow: 60, strings: 0 } }), 'pattern.strings', 'strings = 0');
+throws(() => S.strum(E6, { pattern: { order: 'low-to-high', muted: false,
+  velHigh: 100, velLow: 60, strings: 2.5 } }), 'pattern.strings', 'strings 非整数');
+throws(() => S.strum(E6, { pattern: { order: 'low-to-high', muted: false,
+  velHigh: 100, velLow: 60, strings: 1 } }), 'pattern.strings', 'strings = 1（单弦不成扫弦）');
 
 console.log('\n' + (fail === 0 ? `结论：全部通过（${pass} 项断言）。` : `结论：${fail} 项失败 / ${pass} 项通过。`));
 process.exit(fail === 0 ? 0 : 1);

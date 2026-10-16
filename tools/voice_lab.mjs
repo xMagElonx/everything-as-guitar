@@ -94,7 +94,9 @@ export function measure(voice, opts) {
   const sr = 44100, note = opts.note == null ? 48 : opts.note;
   const gate = opts.gate == null ? 1.2 : opts.gate;
   const dur = opts.duration == null ? gate + 0.6 : opts.duration;
-  const buf = FM.render(voice, { sampleRate: sr, duration: dur, gate, note, normalize: false });
+  const ropts = { sampleRate: sr, duration: dur, gate, note, normalize: false };
+  if (opts.velocity != null) ropts.velocity = opts.velocity;
+  const buf = FM.render(voice, ropts);
 
   const { env, w } = envelope(buf, sr);
   let peak = 0, peakE = 0;
@@ -115,8 +117,11 @@ export function measure(voice, opts) {
   const decay20 = lastAbove(peak * Math.pow(10, -20 / 20)) - peakT;
   const decay30 = lastAbove(peak * Math.pow(10, -30 / 20)) - peakT;
 
-  const cA = centroid(buf, sr, 0.002, 0.05);      // 起音窗
-  const cS = centroid(buf, sr, 0.2, 0.4);         // 延音窗
+  /* 亮度衰减曲线：分窗质心 —— 吉他 = 前 50ms 亮、快速变暗；
+     整段质心比量不出「亮→暗」的时间形状（上轮教训），这里按窗给全曲线 */
+  const wins = [[0.002, 0.05], [0.05, 0.12], [0.12, 0.25], [0.25, 0.5]];
+  const brightCurve = wins.map(([a, b]) => +centroid(buf, sr, a, b).toFixed(0));
+  const cA = brightCurve[0], cS = centroid(buf, sr, 0.2, 0.4);
   const rA = rms(buf, sr, 0.15, 0.3);             // 平台早窗
   const rB = rms(buf, sr, gate * 0.9, gate * 0.98); // 平台晚窗
   const dropDb = (rA > 0 && rB > 0) ? 20 * Math.log10(rB / rA) : -Infinity;
@@ -126,9 +131,11 @@ export function measure(voice, opts) {
     peakT: +peakT.toFixed(3),
     decay20: decay20 < dur - peakT ? +decay20.toFixed(3) : '>' + (dur - peakT).toFixed(1),
     decay30: decay30 < dur - peakT ? +decay30.toFixed(3) : '>' + (dur - peakT).toFixed(1),
-    centroidAttack: +cA.toFixed(0), centroidSustain: +cS.toFixed(0),
-    centroidRatio: cS > 0 ? +(cA / cS).toFixed(2) : Infinity,
+    centroidAttack: cA, centroidSustain: +cS.toFixed(0),
+    brightCurve,
+    brightDrop: cS > 0 ? +(cA / cS).toFixed(2) : Infinity,
     sustainDropDb: +dropDb.toFixed(2),
+    velocity: opts.velocity == null ? 127 : opts.velocity,
     buf,
   };
 }
@@ -137,11 +144,12 @@ export function report(voice, opts) {
   const tag = opts && opts.tag ? '[' + opts.tag + '] ' : '';
   const m = measure(voice, opts);
   console.log(
-    tag + 'note ' + m.note +
+    tag + 'vel ' + m.velocity +
+    '  note ' + m.note +
     '  起音 ' + m.attackMs + 'ms' +
     '  峰 ' + m.peak + '@' + m.peakT + 's' +
     '  -20dB ' + m.decay20 + 's  -30dB ' + m.decay30 + 's' +
-    '  质心 ' + m.centroidAttack + '→' + m.centroidSustain + 'Hz (×' + m.centroidRatio + ')' +
+    '  亮度曲线 ' + m.brightCurve.join('→') + 'Hz (降×' + m.brightDrop + ')' +
     '  平台跌落 ' + m.sustainDropDb + 'dB');
   const mm = measure(muteModulators(voice), opts);
   console.log(

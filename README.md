@@ -12,7 +12,7 @@ bench: search, edit, write). Separate repos; the byte-level engine is forked
 verbatim — see [`ENGINE-FORK.md`](ENGINE-FORK.md).
 
 ⚠ **Hardware status — testers welcome.** Everything here runs, covered by
-**279 test assertions**, but **the device-facing paths have never touched a
+**295 test assertions**, but **the device-facing paths have never touched a
 real FM-1**. The biggest open question and the full unverified list are below.
 
 「Bytes sent」≠「device played it」。 If you have the machine: five minutes
@@ -41,9 +41,15 @@ which is A, not "G major".)
 
 - **32 CC0 starter voices** + **2 original guitar voices** (`data/guitar.js`:
   AC PLUCK acoustic pluck, EL GTR SUS clean electric). The guitar voices are
-  **measurement-driven**: offline render → measure attack time / spectral
-  centroid / decay slope → iterate until targets are met. The measurements
-  live in each voice's `design` field; `tools/voice_lab.mjs` re-runs them.
+  **measurement-driven**: offline render → measure attack time / windowed
+  spectral-centroid (brightness decay curve) / decay slope → iterate until
+  targets are met. The measurements live in each voice's `design` field;
+  `tools/voice_lab.mjs` re-runs them. The v2 recipes follow the **factory
+  Yamaha GUITAR 1** skeleton (ROM1A #12, dx7dump parameter analysis,
+  independently corroborated by mu:zines "Understanding the DX7"):
+  algorithm 8, feedback 7, 12:3:1 ratio stack, no sustain in any operator,
+  velocity sensitivity (soft strum darker — supported by the local preview
+  engine), key scaling, pitch-EG pluck transient.
 - Every voice can be strummed — **the strum engine is voice-agnostic**;
   strumming a bell works fine.
 - Load your own `.syx` banks at runtime; license-vetted external packs can
@@ -97,11 +103,11 @@ node tools/dx7_test.mjs       # ① byte codec round-trip (22)
 node tools/starter_test.mjs   # ② every bundled voice renders audible + guitar targets met (15)
 node tools/param_test.mjs     # ③ 155-param table + pushVoice round-trip + SysEx anchor (26)
 node tools/midi_test.mjs      # ④ transport + device sim (36)
-node tools/strum_test.mjs     # ⑤ strum / humanize / rhythms / scheduler (123)
+node tools/strum_test.mjs     # ⑤ strum / humanize / rhythms / scheduler (139)
 node tools/smoke.mjs          # ⑥ page end-to-end, two scenarios (57)
 ```
 
-All six exit 0, **279 assertions**. Fresh `git clone` → run → green. The
+All six exit 0, **295 assertions**. Fresh `git clone` → run → green. The
 external-pack section **loudly SKIPs** when `data/external/` is empty
 (no bytes is the rights-chain norm, not a failure). LF discipline is
 enforced by `.gitattributes`; a CRLF checkout breaks the smoke test by
@@ -117,7 +123,11 @@ in [`docs/voice-sources.md`](docs/voice-sources.md)). Details in
 
 ## Roadmap
 
-- v0.2 (this repo): VST-style strummer (gestures + loop + motor strum +
+- v0.3 (this repo): strum realism (spread default 90 ms → ~25 ms total window,
+  up-stroke hits top 4 strings only, soft strums drop strings) + guitar voices
+  rebuilt on the factory GUITAR 1 skeleton + preview engine now supports
+  velocity→brightness and the pitch EG
+- v0.2: VST-style strummer (gestures + loop + motor strum +
   humanize) + original guitar voices + push-to-device + MIDI keyboard input
   + external-pack pipeline
 - v0.1: chord pads + strum + event mute + local audition + MIDI out
