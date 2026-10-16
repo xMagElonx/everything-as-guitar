@@ -67,8 +67,10 @@ which is A, not "G major".)
    (`pushVoice` in `engine/params.js`) — effective immediately, no SAVE
    needed; hold **SAVE** on the device to keep it.
 3. **Play**: the actions live on the page / computer keyboard / MIDI
-   keyboard (table above); the device only sounds — it is the voice, the
-   outside is the right hand.
+   keyboard (table above). Be precise about the split: **the FM synth engine
+   runs on the device — it is not a speaker.** The page does exactly one
+   thing: turn strumming gestures into a staggered stream of MIDI notes fed
+   to it. The device is the voice; the outside is the right hand.
 
 ## Five routes to standalone playing (no-flash → flash)
 
@@ -77,7 +79,7 @@ which is A, not "G major".)
 | ① This page + computer brain | ✗ | zero | **this repo** |
 | ② Phone + Bluetooth MIDI (responsive page; FM-1 has BLE; iOS Web MIDI limits stated honestly) | phone in pocket | tiny | adapted here |
 | ③ Stock ARP/SEQ squeezed | ✓ | can't do strumming (ARP is monophonic, SEQ is hand-recorded) | built into the device |
-| ④ Flash existing firmware (FoMni already strums natively, GPL) | ✓ | becomes someone else's instrument | exists in the community |
+| ④ Flash existing firmware (FoMni already strums natively; CTL-1 / ETCH turn the whole device into a USB MIDI controller; both GPL) | ✓ | becomes someone else's instrument | exists in the community |
 | ⑤ Own firmware (Optimist modular parts + Felucca browser simulator first; official updater flashes back to stock) | ✓ | weeks of embedded work; nothing touches hardware until the simulator is green | long-term |
 
 ## Unverified list (the hardware is the judge)
@@ -93,7 +95,14 @@ which is A, not "G major".)
 - **After a bank dump**: manual says "auto-saves after a short delay" vs
   community measurement "hold SAVE" — contradiction, awaiting arbitration.
 - **The FM-1's own 27-key keyboard** as a USB MIDI controller (if it works,
-  everything happens on the device itself).
+  everything happens on the device itself). Custom firmware proves the
+  hardware path exists — **CTL-1** (charlesvestal, updated 2026-10: white
+  keys = chosen scale, black keys = chords, knobs send CC, its own GM
+  sounds work with nothing connected; browser emulator + web installer)
+  and **ETCH** V1.37+ (SikkenWorks: hold SEQ at power-on to boot into a
+  MIDI KEYBOARD mode where all 27 keys send USB Note On/Off, F3–G5 with
+  octave shift) — but that is post-flash behavior; **stock firmware**
+  remains unverified.
 - **No Program Change is sent**: PC support unverified, not assumed.
 
 ## Tests
