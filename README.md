@@ -208,3 +208,5 @@ in [`docs/voice-sources.md`](docs/voice-sources.md)). Details in
   recovery path + owner consent), differential-test discipline. No JieLi
   skill exists anywhere — the niche is empty. Others ship firmware; we ship
   the methodology of shipping it reliably.
+
+You can also try Everything As Guitar in the browser, no flashing needed, in the free community [FM-1 Emulator](https://fm1-emulator.atst.tools/).
